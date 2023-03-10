@@ -1,0 +1,6 @@
+DISK
+TTYLOG*
+TRACE
+*.o
+yalnix
+idle
