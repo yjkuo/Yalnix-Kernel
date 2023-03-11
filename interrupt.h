@@ -5,12 +5,12 @@
 
 typedef void (*ivt_entry_t)(ExceptionInfo *);
 
-extern void ker_handler(ExceptionInfo *);
-extern void clk_handler(ExceptionInfo *);
-extern void ill_handler(ExceptionInfo *);
-extern void mem_handler(ExceptionInfo *);
-extern void math_handler(ExceptionInfo *);
-extern void tty_tx_handler(ExceptionInfo *);
-extern void tty_recv_handler(ExceptionInfo *);
+void kerHandler(ExceptionInfo *);
+void clkHandler(ExceptionInfo *);
+void illHandler(ExceptionInfo *);
+void memHandler(ExceptionInfo *);
+void mathHandler(ExceptionInfo *);
+void ttyXmitHandler(ExceptionInfo *);
+void ttyRecvHandler(ExceptionInfo *);
 
 #endif

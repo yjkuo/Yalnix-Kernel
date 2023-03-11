@@ -8,29 +8,6 @@
 #include <comp421/yalnix.h>
 #include "kernel.h"
 
-// get a free page from free pages list
-int getPage () {
-    int pfn = freePageHead;
-    // borrow a pte from top of region 1 PT
-    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - 2 * sizeof(struct pte));
-    ptr->valid = 1;
-    ptr->kprot = PROT_READ;
-    ptr->pfn = pfn;
-    uintptr_t addr = (VMEM_1_LIMIT - 2 * PAGESIZE);
-    freePageHead = *(int *)(addr);
-    freePageCount--;
-
-    // remember to return the pte
-    ptr->valid = 0;
-
-    return pfn;
-}
-void freePage(int pfn) {
-    uintptr_t ptr = (pfn << PAGESHIFT) + PMEM_BASE;
-    *(int *)(ptr) = freePageHead;
-    freePageHead = pfn;
-}
-
 extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_brk, char **cmd_args) {
     struct pte cur_pte;
     int page_cnt = pmem_size >> PAGESHIFT;
@@ -44,14 +21,14 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
     int heap_cnt;
 
     // initialize interrupt vector table
-    ivt = (ivt_entry_t *) calloc(TRAP_VECTOR_SIZE, sizeof(ivt_entry_t));
-    ivt[TRAP_KERNEL] = &ker_handler;
-    ivt[TRAP_CLOCK] = &clk_handler;
-    ivt[TRAP_ILLEGAL] = &ill_handler;
-    ivt[TRAP_MEMORY] = &mem_handler;
-    ivt[TRAP_MATH] = &math_handler;
-    ivt[TRAP_TTY_TRANSMIT] = &tty_tx_handler;
-    ivt[TRAP_TTY_RECEIVE] = &tty_recv_handler;
+    ivt_entry_t *ivt = (ivt_entry_t *) calloc(TRAP_VECTOR_SIZE, sizeof(ivt_entry_t));
+    ivt[TRAP_KERNEL] = &kerHandler;
+    ivt[TRAP_CLOCK] = &clkHandler;
+    ivt[TRAP_ILLEGAL] = &illHandler;
+    ivt[TRAP_MEMORY] = &memHandler;
+    ivt[TRAP_MATH] = &mathHandler;
+    ivt[TRAP_TTY_TRANSMIT] = &ttyXmitHandler;
+    ivt[TRAP_TTY_RECEIVE] = &ttyRecvHandler;
     WriteRegister(REG_VECTOR_BASE, (RCS421RegVal) ivt);
     
     //allocate memory for region 0 page table 
@@ -125,13 +102,57 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
     // ============ Enable VM ===============
     WriteRegister(REG_VM_ENABLE, 1);
     
-    char *args[] = {"idle", NULL};
-    LoadProgram("idle", args, info);
+    // struct pcb idle_pcb;
+    // idle_pcb.pid = 0;
+    // idle_pcb.next = NULL;
+    // idle_pcb.state = RUNNING;
+    // active = idle_pcb;
+
+    // char *args[] = {"idle", NULL};
+    // LoadProgram("idle", args, info);
+
+    struct pcb init_pcb;
+    init_pcb.pid = 1;
+    init_pcb.next = NULL;
+    init_pcb.state = RUNNING;
+    active = init_pcb;
+
+    char *args2[] = {"init", NULL};
+    LoadProgram("init", args2, info);
 }
 
 extern int SetKernelBrk(void *addr) {
     
     return 0;
+}
+
+// get a free page from free pages list
+int getPage () {
+    int pfn = freePageHead;
+    // borrow a pte from top of region 1 PT
+    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+    ptr[PAGE_TABLE_LEN - 2].valid = 1;
+    ptr[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
+    ptr[PAGE_TABLE_LEN - 2].pfn = pfn;
+    uintptr_t addr = (VMEM_1_LIMIT - (PAGESIZE << 1));
+    freePageHead = *(int *)(addr);
+    freePageCount--;
+
+    // remember to return the pte
+    ptr[PAGE_TABLE_LEN - 2].valid = 0;
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
+
+    return pfn;
+}
+
+void freePage(int pteIndex, int pfn) {
+    uintptr_t addr = (VMEM_0_BASE + pteIndex * PAGESIZE);
+    *(int *)(addr) = freePageHead;
+    freePageHead = pfn;
+}
+
+SavedContext *MySwitchFunc(SavedContext *ctxp, void *p1, void *p2) {
+
 }
 
 int LoadProgram(char *name, char **args, ExceptionInfo *info) {
@@ -251,7 +272,6 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     * the new program being loaded.
     */
     struct pte *pt0 = (struct pte *)(VMEM_1_LIMIT - PAGESIZE);
-    TracePrintf(10, "Load ptr0 = %p\n", pt0);
     int availableCount = freePageCount;
 
     for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
@@ -286,7 +306,7 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
      */
     for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
         if (pt0[i].valid) {
-            freePage(pt0[i].pfn);
+            freePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }
     }
@@ -326,10 +346,10 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     }
 
     /* And finally the user stack pages */
-    // for (; i < ((long) USER_STACK_LIMIT >> PAGESHIFT) - stack_npg; i++) {
-    //     pt0[i].valid = 0;
-    // }
-    TracePrintf(1, "stk pages '%d'\n", stack_npg);
+    for (; i < ((long) USER_STACK_LIMIT >> PAGESHIFT) - stack_npg; i++) {
+        pt0[i].valid = 0;
+    }
+    
     for (; i < ((long) USER_STACK_LIMIT >> PAGESHIFT); i++) {
         pt0[i].valid = 1;
         pt0[i].kprot = PROT_READ | PROT_WRITE;
@@ -409,6 +429,6 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     for (i = 0; i < NUM_REGS; i++)
         info->regs[i] = 0;
     info->psr = 0;
-
+    
     return (0);
 }

@@ -1,9 +1,17 @@
-extern int Fork(void);
-extern int Exec(char *, char **);
-extern void Exit(int) __attribute__ ((noreturn));
-extern int Wait(int *);
-extern int GetPid(void);
-extern int Brk(void *);
-extern int Delay(int);
-extern int TtyRead(int, void *, int);
-extern int TtyWrite(int, void *, int);
+#ifndef SYSCALL_H
+#define SYSCALL_H
+
+#include "kernel.h"
+extern struct pcb active;
+
+int KernelFork();
+int KernelExec();
+void KernelExit();
+int KernelWait();
+int KernelGetPid();
+int KernelBrk();
+int KernelDelay();
+int KernelTtyRead();
+int KernelTtyWrite();
+
+#endif

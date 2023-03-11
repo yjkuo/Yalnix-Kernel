@@ -13,13 +13,17 @@ struct pcb {
     struct pcb *next;
 };
 
-int freePageHead;
-int freePageCount = 0;
-ivt_entry_t *ivt;
-unsigned int last_pid = 0;
-uintptr_t kernelBrk;
+static int freePageHead;
+static int freePageCount = 0;
+static unsigned int lastPid = 0;
+static uintptr_t kernelBrk;
+
+struct pcb active;
+static struct pcb readyHead;
+static struct pcb blockedHead;
 
 int getPage();
-void freePage(int);
-int LoadProgram(char *name, char **args, ExceptionInfo *info);
+void freePage(int, int);
+int LoadProgram(char *, char **, ExceptionInfo *);
+
 #endif

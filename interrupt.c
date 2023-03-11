@@ -1,36 +1,67 @@
+#include "syscall.h"
 #include "interrupt.h"
+#include <comp421/yalnix.h>
 
-extern void ker_handler(ExceptionInfo *info) {
+void kerHandler(ExceptionInfo *info) {
     TracePrintf(1, "kernel interrupt\n");
-    Halt();
+    switch (info->code) {
+        // case YALNIX_EXEC:
+        //     KernelExec();
+        //     break;
+        // case YALNIX_FORK:
+        //     KernelFork();
+        //     break;		
+        // case YALNIX_EXIT:
+        //     KernelExit();
+        //     break;
+        // case YALNIX_WAIT:
+        //     KernelWait();
+        //     break;
+        case YALNIX_GETPID:
+            info->regs[0] = KernelGetPid();
+            break;
+        // case YALNIX_BRK:
+        //     KernelBrk();
+        //     break;
+        // case YALNIX_DELAY:
+        //     KernelDelay();
+        //     break;
+        // case YALNIX_TTY_READ:
+        //     KernelTtyRead();
+        //     break;
+        // case YALNIX_TTY_WRITE
+        //     KernelTtyWrite();
+        //     break;
+    }
+    // Halt();
 }
 
-extern void clk_handler(ExceptionInfo *info) {
+void clkHandler(ExceptionInfo *info) {
     TracePrintf(1, "clock interrupt\n");
-    Halt();
+    // Halt();
 }
 
-extern void ill_handler(ExceptionInfo *info) {
+void illHandler(ExceptionInfo *info) {
     TracePrintf(1, "illigal interrupt\n");
     Halt();
 }
 
-extern void mem_handler(ExceptionInfo *info) {
-    TracePrintf(1, "mem interrupt\n");
+void memHandler(ExceptionInfo *info) {
+    TracePrintf(1, "memory Interrupt %d\n", info->vector);
     Halt();
 }
 
-extern void math_handler(ExceptionInfo *info) {
+void mathHandler(ExceptionInfo *info) {
     TracePrintf(1, "math interrupt\n");
     Halt();
 }
 
-extern void tty_tx_handler(ExceptionInfo *info) {
+void ttyXmitHandler(ExceptionInfo *info) {
     TracePrintf(1, "tty transmit interrupt\n");
     Halt();
 }
 
-extern void tty_recv_handler(ExceptionInfo *info) {
+void ttyRecvHandler(ExceptionInfo *info) {
     TracePrintf(1, "tty receive interrupt\n");
     Halt();
 }
