@@ -10,20 +10,15 @@ struct pcb {
     unsigned int pid;
     state_t state;
     SavedContext *ctxp;
+    uintptr_t pageTable;
+    uintptr_t brk;
+    void *ptPhysical;
+    ExceptionInfo info;
     struct pcb *next;
 };
 
-static int freePageHead;
-static int freePageCount = 0;
-static unsigned int lastPid = 0;
-static uintptr_t kernelBrk;
-
-struct pcb active;
-static struct pcb readyHead;
-static struct pcb blockedHead;
-
 int getPage();
 void freePage(int, int);
-int LoadProgram(char *, char **, ExceptionInfo *);
-
+int LoadProgram(char *, char **, struct pcb *);
+int ExecuteProgram(ExceptionInfo *);
 #endif

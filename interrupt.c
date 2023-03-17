@@ -1,4 +1,3 @@
-#include "syscall.h"
 #include "interrupt.h"
 #include <comp421/yalnix.h>
 
@@ -20,12 +19,12 @@ void kerHandler(ExceptionInfo *info) {
         case YALNIX_GETPID:
             info->regs[0] = KernelGetPid();
             break;
-        // case YALNIX_BRK:
-        //     KernelBrk();
-        //     break;
-        // case YALNIX_DELAY:
-        //     KernelDelay();
-        //     break;
+        case YALNIX_BRK:
+            info->regs[0] = KernelBrk((void *)info->regs[1], info->sp);
+            break;
+        case YALNIX_DELAY:
+            info->regs[0] = KernelDelay(info->regs[1]);
+            break;
         // case YALNIX_TTY_READ:
         //     KernelTtyRead();
         //     break;

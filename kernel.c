@@ -8,6 +8,16 @@
 #include <comp421/yalnix.h>
 #include "kernel.h"
 
+int freePageCount = 0;
+static int freePageHead;
+static unsigned int lastPid = 0;
+static uintptr_t kernelBrk;
+static int VMenabled = 0;
+
+struct pcb *active;
+static struct pcb *readyQueue;
+static struct pcb *blockQueue;
+
 extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_brk, char **cmd_args) {
     struct pte cur_pte;
     int page_cnt = pmem_size >> PAGESHIFT;
@@ -19,9 +29,10 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
     struct pte *pt0, *pt1;
     int text_cnt;
     int heap_cnt;
-
+    kernelBrk = (uintptr_t) orig_brk;
+    
     // initialize interrupt vector table
-    ivt_entry_t *ivt = (ivt_entry_t *) calloc(TRAP_VECTOR_SIZE, sizeof(ivt_entry_t));
+    ivt_entry_t *ivt = (ivt_entry_t *) malloc(TRAP_VECTOR_SIZE * sizeof(ivt_entry_t));
     ivt[TRAP_KERNEL] = &kerHandler;
     ivt[TRAP_CLOCK] = &clkHandler;
     ivt[TRAP_ILLEGAL] = &illHandler;
@@ -52,7 +63,7 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
 
     kernelPageStart = i;
 
-    for (i = (UP_TO_PAGE(orig_brk) - PMEM_BASE) >> PAGESHIFT; i < page_cnt; i++) {
+    for (i = (UP_TO_PAGE(kernelBrk) - PMEM_BASE) >> PAGESHIFT; i < page_cnt; i++) {
         addr = (i << PAGESHIFT) + PMEM_BASE;
         *(int *)addr = prev;
         prev = i;
@@ -78,7 +89,7 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
     
     // create region 1 page table
     text_cnt = ((long)&_etext - VMEM_1_BASE) >> PAGESHIFT;
-    heap_cnt = (UP_TO_PAGE(orig_brk) - VMEM_1_BASE) >> PAGESHIFT;
+    heap_cnt = (UP_TO_PAGE(kernelBrk) - VMEM_1_BASE) >> PAGESHIFT;
 
     for (i = 0; i < heap_cnt; i++) {
         cur_pte.valid = 1;
@@ -101,28 +112,57 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
 
     // ============ Enable VM ===============
     WriteRegister(REG_VM_ENABLE, 1);
-    
-    // struct pcb idle_pcb;
-    // idle_pcb.pid = 0;
-    // idle_pcb.next = NULL;
-    // idle_pcb.state = RUNNING;
-    // active = idle_pcb;
+    VMenabled = 1;
 
-    // char *args[] = {"idle", NULL};
-    // LoadProgram("idle", args, info);
+    // Initialize process queue
+    active = NULL;
+    readyQueue = (struct pcb *) malloc(sizeof(struct pcb));
+    blockQueue = (struct pcb *) malloc(sizeof(struct pcb));
+    memset(readyQueue, 0, sizeof(struct pcb));
+    memset(blockQueue, 0, sizeof(struct pcb));
 
-    struct pcb init_pcb;
-    init_pcb.pid = 1;
-    init_pcb.next = NULL;
-    init_pcb.state = RUNNING;
-    active = init_pcb;
+    struct pcb *idle_pcb = (struct pcb *) malloc(sizeof(struct pcb));
+    char *args[] = {"idle", NULL};
+    LoadProgram("idle", args, idle_pcb);
+
+    struct pcb *init_pcb = (struct pcb *) malloc(sizeof(struct pcb));
+    // init_pcb.pid = 1;
+    // init_pcb.next = NULL;
+    // init_pcb.state = RUNNING;
+    // active = init_pcb;
 
     char *args2[] = {"init", NULL};
-    LoadProgram("init", args2, info);
+    LoadProgram("init", args2, init_pcb);
+    ExecuteProgram(info);
 }
 
 extern int SetKernelBrk(void *addr) {
-    
+    TracePrintf(1, "Set kernel brk Called\n");
+    if (VMenabled == 1) {
+        TracePrintf(1, "Set kernel brk after VM enabled\n");
+        struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+        if ((uintptr_t) addr > kernelBrk) {
+            // grow the kernel heap
+            TracePrintf(1, "Grow heap\n");
+            int start = (UP_TO_PAGE(kernelBrk) - VMEM_1_BASE) >> PAGESHIFT;
+            int end = (UP_TO_PAGE(addr) - VMEM_1_BASE) >> PAGESHIFT;
+            if (end - start > freePageCount) {
+                // we don't have enough free pages, return error
+                return -1;
+            }
+
+            int i;
+            for (i = start; i < end; i++) {
+                pt1[i].valid = 1;
+                pt1[i].kprot = PROT_READ | PROT_WRITE;
+                pt1[i].uprot = PROT_NONE;
+                pt1[i].pfn = getPage();
+            }
+        }
+        
+        WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_1);
+    }
+    kernelBrk = (uintptr_t) addr;
     return 0;
 }
 
@@ -130,16 +170,16 @@ extern int SetKernelBrk(void *addr) {
 int getPage () {
     int pfn = freePageHead;
     // borrow a pte from top of region 1 PT
-    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-    ptr[PAGE_TABLE_LEN - 2].valid = 1;
-    ptr[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
-    ptr[PAGE_TABLE_LEN - 2].pfn = pfn;
+    struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+    pt1[PAGE_TABLE_LEN - 2].valid = 1;
+    pt1[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
+    pt1[PAGE_TABLE_LEN - 2].pfn = pfn;
     uintptr_t addr = (VMEM_1_LIMIT - (PAGESIZE << 1));
     freePageHead = *(int *)(addr);
     freePageCount--;
 
     // remember to return the pte
-    ptr[PAGE_TABLE_LEN - 2].valid = 0;
+    pt1[PAGE_TABLE_LEN - 2].valid = 0;
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
 
     return pfn;
@@ -152,10 +192,19 @@ void freePage(int pteIndex, int pfn) {
 }
 
 SavedContext *MySwitchFunc(SavedContext *ctxp, void *p1, void *p2) {
-
+    return NULL;
+}
+int ExecuteProgram(ExceptionInfo *info) {
+    struct pcb *pcbp = readyQueue->next;
+    readyQueue->next = pcbp->next;
+    pcbp->next = NULL;
+    active = pcbp;
+    memcpy(info, &pcbp->info, sizeof(ExceptionInfo));
+    WriteRegister(REG_PTR0, (RCS421RegVal) pcbp->pageTable);
+    return 0;
 }
 
-int LoadProgram(char *name, char **args, ExceptionInfo *info) {
+int LoadProgram(char *name, char **args, struct pcb *pcbp) {
     int fd;
     int status;
     struct loadinfo li;
@@ -278,7 +327,8 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
         if (pt0[i].valid)
             availableCount++;
     }
-    if (text_npg + data_bss_npg + stack_npg > availableCount) {
+
+    if (text_npg + data_bss_npg + stack_npg + 1 > availableCount) {
 	TracePrintf(0,
 	    "LoadProgram: program '%s' size too large for PHYSICAL memory\n",
 	    name);
@@ -290,7 +340,7 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     /* Initialize sp for the current process to (void *)cpp.
      * The value of cpp was initialized above.
      */
-    info->sp = (void *)cpp;
+    pcbp->info.sp = (void *)cpp;
 
     /*
      *  Free all the old physical memory belonging to this process,
@@ -304,11 +354,21 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
      * memory page indicated by that PTE's pfn field.  Set all
      * of these PTEs to be no longer valid.
      */
-    for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
-        if (pt0[i].valid) {
-            freePage(i, pt0[i].pfn);
-            pt0[i].valid = 0;
+    if (active) {
+        TracePrintf(1, "Free current process's page table\n");
+        struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+        pt1[PAGE_TABLE_LEN - 2].valid = 1;
+        pt1[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
+        pt1[PAGE_TABLE_LEN - 2].pfn = pfn;
+        struct pte *pt = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE << 1));
+        for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
+            if (pt[i].valid) {
+                freePage(i, pt[i].pfn);
+                pt[i].valid = 0;
+            }
         }
+        pt1[PAGE_TABLE_LEN - 2].valid = 0;
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt);
     }
 
     /*
@@ -344,6 +404,9 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
         pt0[i].uprot = PROT_READ | PROT_WRITE;
         pt0[i].pfn = getPage();
     }
+
+    // Initialize brk of the current process
+    pcbp->brk = (uintptr_t)(i << PAGESHIFT);
 
     /* And finally the user stack pages */
     for (; i < ((long) USER_STACK_LIMIT >> PAGESHIFT) - stack_npg; i++) {
@@ -390,6 +453,19 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     for (i = MEM_INVALID_PAGES; i < MEM_INVALID_PAGES + text_npg; i++) {
         pt0[i].kprot = PROT_READ | PROT_EXEC;
     }
+    
+    // write the content of new page table into allocated page frame
+    int newpfn = getPage();
+    // borrow a pte from top of region 1 PT
+    struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+    pt1[PAGE_TABLE_LEN - 2].valid = 1;
+    pt1[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
+    pt1[PAGE_TABLE_LEN - 2].pfn = newpfn;
+    void *addr = (void *)(VMEM_1_LIMIT - (PAGESIZE << 1));
+    memcpy(addr, pt0, PAGE_TABLE_SIZE);
+    pcbp->pageTable = newpfn << PAGESHIFT;
+    pt1[PAGE_TABLE_LEN - 2].valid = 0;
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
 
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
@@ -402,7 +478,7 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
     /*
      *  Set the entry point in the ExceptionInfo.
      */
-    info->pc = (void *)li.entry;
+    pcbp->info.pc = (void *)li.entry;
 
     /*
      *  Now, finally, build the argument list on the new stack.
@@ -427,8 +503,19 @@ int LoadProgram(char *name, char **args, ExceptionInfo *info) {
      *  since this PSR value of 0 does not have the PSR_MODE bit set.
      */
     for (i = 0; i < NUM_REGS; i++)
-        info->regs[i] = 0;
-    info->psr = 0;
-    
+        pcbp->info.regs[i] = 0;
+    pcbp->info.psr = 0;
+
+    // Initialize pcb variables
+    pcbp->pid = lastPid++;
+    pcbp->next = NULL;
+    pcbp->state = READY;
+
+    // put into ready queue
+    struct pcb *current = readyQueue;
+    while (current->next)
+        current = current->next;
+    current->next = pcbp;
+
     return (0);
 }
