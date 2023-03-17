@@ -1,29 +1,57 @@
 #ifndef KERNEL_H
 #define KERNEL_H
 
+
 #include <stdint.h>
+
+#include <comp421/hardware.h>
+#include <comp421/yalnix.h>
+
 #include "interrupt.h"
 
-typedef enum state_t { READY, RUNNING, BLOCKED} state_t;
 
+// States a process may be in
+typedef enum state_t {RUNNING, READY, BLOCKED} state_t;
+
+
+// Structure of a PCB
 struct pcb {
     unsigned int pid;
     state_t state;
-    SavedContext *ctxp;
+    unsigned int pfn0;
+    SavedContext ctxp;
     struct pcb *next;
 };
 
-static int freePageHead;
-static int freePageCount = 0;
-static unsigned int lastPid = 0;
-static uintptr_t kernelBrk;
 
-struct pcb active;
-static struct pcb readyHead;
-static struct pcb blockedHead;
+// Stores the address of the region 1 page table
+unsigned int pfn1;
+struct pte *pt1;
 
-int getPage();
-void freePage(int, int);
-int LoadProgram(char *, char **, ExceptionInfo *);
+// Stores the address and index of the borrowed PTE
+void *borrowed_addr;
+int borrowed_index;
+
+// Manages a list of free pages
+static unsigned int free_head;
+static unsigned int free_npg;
+
+// Keeps track of the last assigned PID
+static unsigned int lastpid;
+
+// Stores the current kernel break address
+static uintptr_t kernelbrk;
+
+// Manages the active process
+static struct pcb *active;
+
+
+// Function prototypes
+int GetPage ();
+void FreePage (int , int );
+int LoadProgram (char* , char** , ExceptionInfo* );
+SavedContext* InitContext (SavedContext* , void* , void* );
+SavedContext* Switch (SavedContext* , void* , void* );
+
 
 #endif

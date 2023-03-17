@@ -1,5 +1,6 @@
 #include "syscall.h"
 
+
 int KernelFork() {
     return 0;
 }
@@ -16,9 +17,10 @@ int KernelWait() {
     return 0;
 }
 
+/* Returns PID of currently active process */
 int KernelGetPid() {
-    TracePrintf(0, "GetPid: '%d'\n", active.pid);
-    return active.pid;
+    TracePrintf(0, "GetPid: '%d'\n", active->pid);
+    return active->pid;
 }
 
 int KernelBrk() {
