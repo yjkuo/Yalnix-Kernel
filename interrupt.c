@@ -1,4 +1,5 @@
 #include "interrupt.h"
+#include "syscall.h"
 #include <comp421/yalnix.h>
 
 void kerHandler(ExceptionInfo *info) {

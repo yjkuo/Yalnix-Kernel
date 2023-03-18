@@ -1,6 +1,7 @@
 #include <comp421/yalnix.h>
 #include "syscall.h"
 
+
 int KernelFork() {
     return 0;
 }
@@ -17,6 +18,7 @@ int KernelWait() {
     return 0;
 }
 
+/* Returns PID of currently active process */
 int KernelGetPid() {
     TracePrintf(0, "GetPid: '%d'\n", active->pid);
     return active->pid;
@@ -25,7 +27,7 @@ int KernelGetPid() {
 int KernelBrk(void *addr, void *sp) {
     TracePrintf(1, "Syscall brk Called\n");
     uintptr_t curBrk = active->brk;
-    struct pte *pt0 = (struct pte *) active->pageTable;
+    struct pte *pt0 = (struct pte *) active->pfn0;
     
     if ((uintptr_t)addr >= DOWN_TO_PAGE(sp)) {
         return ERROR;
@@ -35,10 +37,10 @@ int KernelBrk(void *addr, void *sp) {
         TracePrintf(1, "Grow user heap\n");
         int start = (UP_TO_PAGE(curBrk) - VMEM_0_BASE) >> PAGESHIFT;
         int end = (UP_TO_PAGE(addr) - VMEM_0_BASE) >> PAGESHIFT;
-        if (end - start > freePageCount) {
+        if (end - start > free_npg) {
             // we don't have enough free pages, return error
             TracePrintf(1, "Warning: no more memory available\n");
-            TracePrintf(1, "Avalable pages: %d\n", freePageCount);
+            TracePrintf(1, "Avalable pages: %d\n", free_npg);
             TracePrintf(1, "From page %d to page %d\n", start, end);
             return ERROR;
         }
@@ -53,7 +55,7 @@ int KernelBrk(void *addr, void *sp) {
             pt0[i].valid = 1;
             pt0[i].kprot = PROT_READ | PROT_WRITE;
             pt0[i].uprot = PROT_READ | PROT_WRITE;
-            pt0[i].pfn = getPage();
+            pt0[i].pfn = GetPage();
         }
     } else {
         // shrink the heap
@@ -64,7 +66,7 @@ int KernelBrk(void *addr, void *sp) {
         int i;
         for (i = start; i < end; i++) {
             if (pt0[i].valid) {
-                freePage(i, pt0[i].pfn);
+                FreePage(i, pt0[i].pfn);
                 pt0[i].valid = 0;
             }
         }
@@ -76,8 +78,6 @@ int KernelBrk(void *addr, void *sp) {
 }
 
 int KernelDelay(int clock_ticks) {
-    active->state = BLOCKED;
-    ContextSwitch
     return 0;
 }
 

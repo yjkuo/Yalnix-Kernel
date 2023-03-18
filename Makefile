@@ -33,8 +33,8 @@ ALL = yalnix idle init
 #	make up your kernel, and KERNEL_SRCS should  be a list of
 #	the corresponding source files that make up your kernel.
 #
-KERNEL_OBJS = interrupt.o syscall.o kernel.o
-KERNEL_SRCS = interrupt.c syscall.c kernel.c
+KERNEL_OBJS = kernel.o interrupt.o syscall.o queue.o
+KERNEL_SRCS = kernel.c interrupt.c syscall.c queue.c
 
 #
 #	You should not have to modify anything else in this Makefile

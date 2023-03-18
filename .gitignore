@@ -4,3 +4,4 @@ TRACE
 *.o
 yalnix
 idle
+.vscode

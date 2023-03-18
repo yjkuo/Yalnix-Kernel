@@ -1,12 +1,20 @@
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
-#include "kernel.h"
-extern struct pcb *active;
-extern int freePageCount;
-extern int getPage();
-extern void freePage(int, int);
 
+#include "kernel.h"
+
+
+
+
+// PCB of currently active process
+extern struct pcb *active;
+
+extern unsigned int free_npg;
+extern int GetPage();
+extern void FreePage(int , int);
+
+// System call handler prototypes
 int KernelFork();
 int KernelExec();
 void KernelExit();
@@ -16,5 +24,6 @@ int KernelBrk(void *addr, void *sp);
 int KernelDelay(int);
 int KernelTtyRead();
 int KernelTtyWrite();
+
 
 #endif
