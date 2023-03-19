@@ -19,9 +19,8 @@ struct pcb {
     unsigned int pid;
     state_t state;
     uintptr_t brk;
-    ExceptionInfo info;
     unsigned int pfn0;
-    SavedContext ctxp;
+    SavedContext ctx;
     struct pcb *next;
 };
 
@@ -53,7 +52,7 @@ struct pcb *active;
 // Function prototypes
 int GetPage ();
 void FreePage (int , int );
-int LoadProgram (char* , char** , ExceptionInfo* );
+int LoadProgram (char* , char** , ExceptionInfo * , struct pcb* );
 int ExecuteProgram(ExceptionInfo *);
 SavedContext* InitContext (SavedContext* , void* , void* );
 SavedContext* Switch (SavedContext* , void* , void* );

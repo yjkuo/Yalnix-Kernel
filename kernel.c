@@ -136,28 +136,51 @@ extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_
 
     borrowed_addr = (void*)(VMEM_1_LIMIT - (PAGESIZE << 1));
     borrowed_index = PAGE_TABLE_LEN - 2;
-
-    // struct pcb idle_pcb;
-    // idle_pcb.pid = 0;
-    // idle_pcb.next = NULL;
-    // idle_pcb.state = RUNNING;
-    // active = idle_pcb;
-
-    // struct pcb *idle_pcb = (struct pcb *) malloc(sizeof(struct pcb));
-    // char *args[] = {"idle", NULL};
-    // LoadProgram("idle", args, idle_pcb);
+    
+    struct pcb *idle_pcb = (struct pcb *) malloc(sizeof(struct pcb));
+    idle_pcb->pid = lastpid++;
+    idle_pcb->pfn0 = pfn;
+    idle_pcb->state = READY;
+    idle_pcb->next = NULL;
+    active = idle_pcb;
+    ContextSwitch(InitContext, &idle_pcb->ctx, NULL, NULL);
+    char *args[] = {"idle", NULL};
+    LoadProgram("idle", args, info, idle_pcb);
+    enq(&ready, idle_pcb);
 
     struct pcb *init_pcb = (struct pcb*) malloc(sizeof(struct pcb));
-    init_pcb->pid = 1;
-    init_pcb->state = RUNNING;
     init_pcb->pfn0 = GetPage();
-    init_pcb->next = NULL;
-    // active = init_pcb;
-    ContextSwitch(InitContext, &init_pcb->ctxp, NULL, NULL);
+    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
 
+    ptr[borrowed_index - 1].valid = 1;
+    ptr[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
+    ptr[borrowed_index - 1].uprot = PROT_NONE;
+    ptr[borrowed_index - 2].valid = 1;
+    ptr[borrowed_index - 2].kprot = PROT_READ | PROT_WRITE;
+    ptr[borrowed_index - 2].pfn = init_pcb->pfn0;
+    
+    void *copy_addr = (void*)(VMEM_1_LIMIT - PAGESIZE * 3);
+    struct pte * tmp = (struct pte *) (VMEM_1_LIMIT - PAGESIZE * 4);
+    int x;
+    for (x = 0; x < KERNEL_STACK_PAGES; x++) {
+        ptr[borrowed_index - 1].pfn = GetPage();
+        tmp[PAGE_TABLE_LEN - KERNEL_STACK_PAGES + x] = ptr[borrowed_index - 1];
+        memcpy(copy_addr, (void*)((long) KERNEL_STACK_BASE + x * PAGESIZE), PAGESIZE);
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) copy_addr);
+    }
+
+    ptr[borrowed_index - 1].valid = 0;
+    ptr[borrowed_index - 2].valid = 0;
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) copy_addr);
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) tmp);
+    WriteRegister(REG_PTR0, (RCS421RegVal) (init_pcb->pfn0 << PAGESHIFT));
+    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+    // ContextSwitch(Switch, &idle_pcb->ctx, (void *) idle_pcb, (void *) init_pcb);
+    active = init_pcb;
     char *args2[] = {"init", NULL};
-    LoadProgram("init", args2, info);
-    ExecuteProgram(info);
+    LoadProgram("init", args2, info, init_pcb);
+
+    // ContextSwitch(Switch, &init_pcb->ctxp, idle_pcb, init_pcb);
 }
 
 extern int SetKernelBrk(void *addr) {
@@ -192,14 +215,21 @@ extern int SetKernelBrk(void *addr) {
 
 /* Gets a free page from the free page list */
 int GetPage () {
+    unsigned int old_valid, old_kprot, old_pfn;
 
     // Gets the first available PFN from the list
     int pfn = free_head;
 
     // Borrows a PTE from the top of the region 1 page table
     struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
+    if (ptr[borrowed_index].valid) {
+        old_valid = ptr[borrowed_index].valid;
+        old_kprot = ptr[borrowed_index].kprot;
+        old_pfn = ptr[borrowed_index].pfn;
+    }
+
     ptr[borrowed_index].valid = 1;
-    ptr[borrowed_index].kprot = PROT_READ | PROT_WRITE;
+    ptr[borrowed_index].kprot = PROT_READ;
     ptr[borrowed_index].pfn = pfn;
 
     // Moves to the next page in the list
@@ -210,7 +240,13 @@ int GetPage () {
     free_npg--;
 
     // Returns the borrowed PTE
-    ptr[borrowed_index].valid = 0;
+    if (old_valid) {
+        ptr[borrowed_index].valid = old_valid;
+        ptr[borrowed_index].kprot = old_kprot;
+        ptr[borrowed_index].pfn = old_pfn;
+    } else {
+        ptr[borrowed_index].valid = 0;
+    }
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
 
     // Returns the PFN
@@ -269,21 +305,21 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     // Makes process 2 the active process
     pcb2->state = RUNNING;
     active = pcb2;
-
+    TracePrintf(0, "writing ptr0...\n");
     // Switches to the region 0 page table of process 2
     addr = pcb2->pfn0 << PAGESHIFT;
     WriteRegister(REG_PTR0, (RCS421RegVal) addr);
-
     // Flushes all region 0 entries from the TLB
-    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+    // WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+    TracePrintf(0, "done...\n");
 
     // Returns the saved context from the second process
-    return &pcb2->ctxp;
+    return &pcb2->ctx;
 }
 
 
 /* Loads a program in the current process's address space */
-int LoadProgram (char *name, char **args, ExceptionInfo *info) {
+int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp) {
 
     int fd;
     int status;
@@ -371,36 +407,44 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     ptr[borrowed_index - 1].valid = 1;
     ptr[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
     ptr[borrowed_index - 1].pfn = active->pfn0;
-
-    // Accesses the region 0 page table
-    pt0 = (struct pte*) (VMEM_1_LIMIT - (PAGESIZE * 3));
+    TracePrintf(0, "pfn: of active process: %d\n", active->pfn0);
+    // Accesses the active procees region 0 page table
+    pt0 = (struct pte*) (VMEM_1_LIMIT - PAGESIZE * 3);
 
     // Makes sure there will be enough physical memory to load the new program
     available_npg = free_npg;
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
         if(pt0[i].valid)
             available_npg++;
-    if(text_npg + data_bss_npg + stack_npg + 1 > available_npg) {
+    if(text_npg + data_bss_npg + stack_npg > available_npg) {
         TracePrintf(0, "LoadProgram: program '%s' size too large for PHYSICAL memory\n", name);
         free(argbuf);
         close(fd);
-        ptr[borrowed_index].valid = 0;
-        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
+        // ptr[borrowed_index].valid = 0;
+        // WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
         return -1;
     }
 
     // Initializes SP for current process to (void*)cpp
     info->sp = (void*) cpp;
-    if (active) {
-        TracePrintf(1, "Free old process's page table\n");
-        // Frees all the old physical memory belonging to this process
-        for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
-            if(pt0[i].valid) {
-                FreePage(i, pt0[i].pfn);
-                pt0[i].valid = 0;
-            }
-    }
 
+    // Frees all the old physical memory belonging to this process
+    for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
+        if(pt0[i].valid) {
+            FreePage(i, pt0[i].pfn);
+            pt0[i].valid = 0;
+        }
+
+    // allocate new region 0 page table for this process 
+    // int cur_pfn = GetPage();
+    // ptr[borrowed_index - 1].pfn = cur_pfn;
+    // ptr[borrowed_index - 1].valid = 1;
+    // ptr[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
+    // pcbp->pfn0 = cur_pfn;
+    TracePrintf(0, "pfn 1: %d\n", ptr[PAGE_TABLE_LEN - 1].pfn);
+    TracePrintf(0, "pfn 2: %d\n", ptr[PAGE_TABLE_LEN - 2].pfn);
+    TracePrintf(0, "pfn 3: %d\n", ptr[PAGE_TABLE_LEN - 3].pfn);
+    // pt0 = (struct pte *)(VMEM_1_LIMIT - PAGESIZE * 3);
     // Marks the first MEM_INVALID_PAGES PTEs in the region 0 page table invalid
     total_npg = MEM_INVALID_PAGES;
     for(i = 0; i < total_npg; i++)
@@ -424,17 +468,17 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
         pt0[i].pfn = GetPage();
     }
 
-    // // Initialize brk of the current process
-    // pcbp->brk = (uintptr_t)(i << PAGESHIFT);
+    // Initialize brk of the current process
+    pcbp->brk = (uintptr_t)(i << PAGESHIFT);
 
     // Marks all pages in the subsequent gap as invalid
-    total_npg += (USER_STACK_LIMIT >> PAGESHIFT) - stack_npg;
-    for(; i < total_npg; i++)
+    total_npg = (USER_STACK_LIMIT >> PAGESHIFT) - stack_npg;
+    for (; i < total_npg; i++)
         pt0[i].valid = 0;
 
     // Fills in the page table with the right number of user stack pages
     total_npg += stack_npg;
-    for(; i < total_npg; i++) {
+    for(; i < ((long) USER_STACK_LIMIT >> PAGESHIFT); i++) {
         pt0[i].valid = 1;
         pt0[i].kprot = PROT_READ | PROT_WRITE;
         pt0[i].uprot = PROT_READ | PROT_WRITE;
@@ -443,14 +487,14 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
-
+    
     // Reads the text and data from the file into memory
     if(read(fd, (void*) MEM_INVALID_SIZE, li.text_size + li.data_size) != li.text_size + li.data_size) {
         TracePrintf(0, "LoadProgram: couldn't read for '%s'\n", name);
         free(argbuf);
         close(fd);
-        ptr[borrowed_index].valid = 0;
-        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - (PAGESIZE * 3)));
+        // ptr[borrowed_index].valid = 0;
+        // WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
         return -2;
     }
 
@@ -460,20 +504,6 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Sets the page table entries for the program text to be readable and executable
     for(i = MEM_INVALID_PAGES; i < MEM_INVALID_PAGES + text_npg; i++)
         pt0[i].kprot = PROT_READ | PROT_EXEC;
-    
-    
-    // // write the content of new page table into allocated page frame
-    // int newpfn = getPage();
-    // // borrow a pte from top of region 1 PT
-    // struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-    // pt1[PAGE_TABLE_LEN - 2].valid = 1;
-    // pt1[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
-    // pt1[PAGE_TABLE_LEN - 2].pfn = newpfn;
-    // void *addr = (void *)(VMEM_1_LIMIT - (PAGESIZE << 1));
-    // memcpy(addr, pt0, PAGE_TABLE_SIZE);
-    // pcbp->pageTable = newpfn << PAGESHIFT;
-    // pt1[PAGE_TABLE_LEN - 2].valid = 0;
-    // WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
 
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
@@ -504,19 +534,8 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     info->psr = 0;
 
     // Returns the borrowed PTE
-    ptr[borrowed_index].valid = 0;
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - (PAGESIZE * 3)));
-
-    // // Initialize pcb variables
-    // pcbp->pid = lastPid++;
-    // pcbp->next = NULL;
-    // pcbp->state = READY;
-
-    // // put into ready queue
-    // struct pcb *current = readyQueue;
-    // while (current->next)
-    //     current = current->next;
-    // current->next = pcbp;
-
+    ptr[borrowed_index - 1].valid = 0;
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - PAGESIZE * 3));
+    
     return 0;
 }
