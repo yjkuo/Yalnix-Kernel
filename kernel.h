@@ -20,6 +20,7 @@ struct pcb {
     state_t state;
     uintptr_t brk;
     unsigned int pfn0;
+    int clock_ticks;
     SavedContext ctx;
     struct pcb *next;
 };
@@ -45,13 +46,14 @@ unsigned int free_npg;
 
 // Manages the active process
 struct pcb *active;
-
+struct pcb *idle_pcb;
 // // Flag of vitual memory enabled
 // static int vm_enabled;
 
 // Function prototypes
 int GetPage ();
 void FreePage (int , int );
+void CopyKernelStack(int , int );
 int LoadProgram (char* , char** , ExceptionInfo * , struct pcb* );
 int ExecuteProgram(ExceptionInfo *);
 SavedContext* InitContext (SavedContext* , void* , void* );

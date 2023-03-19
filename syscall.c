@@ -1,5 +1,6 @@
 #include <comp421/yalnix.h>
 #include "syscall.h"
+#include "queue.h"
 
 
 int KernelFork() {
@@ -83,6 +84,14 @@ int KernelBrk(void *addr, void *sp) {
 }
 
 int KernelDelay(int clock_ticks) {
+    TracePrintf(0, "Entering delay kernel call\n");
+    active->clock_ticks = clock_ticks;
+    active->state = BLOCKED;
+    enq(&blocked, active);
+ 
+    if (qempty(&ready))
+        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) idle_pcb);
+
     return 0;
 }
 

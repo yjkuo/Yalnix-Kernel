@@ -11,8 +11,8 @@ struct queue {
 };
 
 // Manages the ready and blocked processes
-static struct queue ready;
-static struct queue blocked;
+struct queue ready;
+struct queue blocked;
 
 
 // Function prototypes

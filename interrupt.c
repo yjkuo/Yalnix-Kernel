@@ -1,6 +1,7 @@
+#include <comp421/yalnix.h>
 #include "interrupt.h"
 #include "syscall.h"
-#include <comp421/yalnix.h>
+#include "queue.h"
 
 void kerHandler(ExceptionInfo *info) {
     TracePrintf(1, "kernel interrupt\n");
@@ -38,7 +39,21 @@ void kerHandler(ExceptionInfo *info) {
 
 void clkHandler(ExceptionInfo *info) {
     TracePrintf(1, "clock interrupt\n");
-    // Halt();
+    if (!qempty(&blocked)) {
+        struct pcb *cur = blocked.head;
+        while (cur) {
+            cur->clock_ticks--;
+            TracePrintf(0, "clock %d\n", cur->clock_ticks);
+            if (cur->clock_ticks == 0) {
+                ContextSwitch(Switch, &active->ctx, (void *) active, (void *) cur);
+                // cur->state = READY;
+                // // need to modify deq to specify which process to deq
+                // deq(&blocked);
+                // enq(&ready, cur);
+            }
+            cur = cur->next;
+        }
+    }
 }
 
 void illHandler(ExceptionInfo *info) {

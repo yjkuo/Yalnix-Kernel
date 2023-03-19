@@ -4,4 +4,5 @@ TRACE
 *.o
 yalnix
 idle
+init
 .vscode

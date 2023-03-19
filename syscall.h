@@ -9,10 +9,13 @@
 
 // PCB of currently active process
 extern struct pcb *active;
-
+extern struct pcb *idle_pcb;
+extern struct queue ready;
+extern struct queue blocked;
 extern unsigned int free_npg;
 extern int GetPage();
 extern void FreePage(int , int);
+extern SavedContext* Switch (SavedContext* , void* , void* );
 
 // System call handler prototypes
 int KernelFork();
