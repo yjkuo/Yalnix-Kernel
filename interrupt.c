@@ -15,9 +15,23 @@ void KernelHandler (ExceptionInfo *info) {
 
     // Selects the appropriate handler function
     switch(info->code) {
-
-        // Handles GetPid()
-        case YALNIX_GETPID :
+        case YALNIX_EXEC:
+            KernelExec((char *) info->regs[1], (char **) info->regs[2], info);
+            break;
+        case YALNIX_FORK:
+            TracePrintf(1, "pc: %p\n", info->pc);
+            TracePrintf(1, "sp: %p\n", info->sp);
+            info->regs[0] = KernelFork(active->pid);
+            TracePrintf(1, "pc: %p\n", info->pc);
+            TracePrintf(1, "sp: %p\n", info->sp);
+            break;		
+        case YALNIX_EXIT:
+            KernelExit((int) info->regs[1]);
+            break;
+        // case YALNIX_WAIT:
+        //     KernelWait();
+        //     break;
+        case YALNIX_GETPID:
             info->regs[0] = KernelGetPid();
             break;
 
@@ -64,7 +78,7 @@ void ClockHandler (ExceptionInfo *info) {
         struct pcb *new_process = deq(&ready);
 
         // Switches to the new process
-        ContextSwitch(Switch, &active->ctxp, (void*) active, (void*) new_process);
+        ContextSwitch(Switch, &active->ctx, (void*) active, (void*) new_process);
     }
 }
 
@@ -153,6 +167,8 @@ void IllegalHandler (ExceptionInfo *info) {
 
 void MemoryHandler (ExceptionInfo *info) {
     TracePrintf(5, "memory Interrupt %d\n", info->vector);
+    TracePrintf(5, "pc: %p\n", info->pc);
+    TracePrintf(5, "sp: %p\n", info->sp);
     Halt();
 }
 

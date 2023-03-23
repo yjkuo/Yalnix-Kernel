@@ -171,7 +171,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     active = &init_pcb;
 
     // Initializes the saved context switch for the idle process
-    ContextSwitch(InitContext, &idle_pcb.ctxp, NULL, &init_pcb);
+    ContextSwitch(InitContext, &idle_pcb.ctx, NULL, &init_pcb);
 
     // Stops executing if the first context switch has been completed
     if(first_return)
@@ -269,6 +269,7 @@ void FreePage (int index, int pfn) {
     // Computes the virtual address of the page
     unsigned int *addr = (unsigned int*)((uintptr_t) VMEM_0_BASE + index * PAGESIZE);
 
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
     // Adds the page to the list
     *addr = free_head;
     free_head = pfn;
@@ -449,12 +450,11 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     // Switches to the region 0 page table of the second process
     addr = pcb2->ptaddr0;
     WriteRegister(REG_PTR0, (RCS421RegVal) addr);
-
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Returns the saved context from the second process
-    return &pcb2->ctxp;
+    return &pcb2->ctx;
 }
 
 
@@ -569,7 +569,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
         if(pt0[i].valid) {
-            pt0[i].kprot = PROT_WRITE;
+            pt0[i].kprot = PROT_READ | PROT_WRITE;
             FreePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }

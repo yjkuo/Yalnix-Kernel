@@ -20,7 +20,7 @@ struct pcb {
     state_t state;
     uintptr_t ptaddr0;
     uintptr_t brk;
-    SavedContext ctxp;
+    SavedContext ctx;
     int clock_ticks;
     struct pcb *next;
 };
