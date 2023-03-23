@@ -1,16 +1,19 @@
 #ifndef INTERRUPT_H
 #define INTERRUPT_H
 
+
 #include <comp421/hardware.h>
 
-typedef void (*ivt_entry_t)(ExceptionInfo *);
 
-void kerHandler(ExceptionInfo *);
-void clkHandler(ExceptionInfo *);
-void illHandler(ExceptionInfo *);
-void memHandler(ExceptionInfo *);
-void mathHandler(ExceptionInfo *);
-void ttyXmitHandler(ExceptionInfo *);
-void ttyRecvHandler(ExceptionInfo *);
+typedef void (*ivt_entry_t)(ExceptionInfo* );
+
+void KernelHandler (ExceptionInfo* );
+void ClockHandler (ExceptionInfo* );
+void IllegalHandler (ExceptionInfo* );
+void MemoryHandler (ExceptionInfo* );
+void MathHandler (ExceptionInfo* );
+void TtyTransmitHandler (ExceptionInfo* );
+void TtyReceiveHandler (ExceptionInfo* );
+
 
 #endif

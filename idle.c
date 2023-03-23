@@ -1,8 +1,9 @@
 #include <comp421/hardware.h>
 
 int main() {
-    TracePrintf(1, "Idle start running...\n");
-    while (1) {
+
+    while(1) {
+        TracePrintf(20, "idle running ...\n");
         Pause();
     }
     return 0;

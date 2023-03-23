@@ -1,8 +1,5 @@
-DISK
-TTYLOG*
-TRACE
-*.o
-yalnix
-idle
-init
 .vscode
+DISK
+TRACE
+TTYLOG*
+core.*

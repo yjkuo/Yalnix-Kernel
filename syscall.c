@@ -1,6 +1,8 @@
 #include <comp421/yalnix.h>
+
 #include "syscall.h"
 #include "queue.h"
+#include "list.h"
 
 
 int KernelFork() {
@@ -19,81 +21,113 @@ int KernelWait() {
     return 0;
 }
 
+
 /* Returns PID of currently active process */
-int KernelGetPid() {
-    TracePrintf(0, "GetPid: '%d'\n", active->pid);
+int KernelGetPid () {
+    TracePrintf(10, "process %d: executing GetPid()\n", active->pid);
     return active->pid;
 }
 
-int KernelBrk(void *addr, void *sp) {
-    TracePrintf(1, "Syscall brk Called\n");
-    uintptr_t curbrk = active->brk;
 
-    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-    ptr[PAGE_TABLE_LEN - 2].valid = 1;
-    ptr[PAGE_TABLE_LEN - 2].kprot = PROT_READ | PROT_WRITE;
-    ptr[PAGE_TABLE_LEN - 2].pfn = active->pfn0;
-    struct pte *pt0 = (struct pte *) (VMEM_1_LIMIT - PAGESIZE);
-    
-    if ((uintptr_t)addr >= DOWN_TO_PAGE(sp)) {
+/* Sets the break for the currently active process */
+int KernelBrk (void *addr, void *sp) {
+    TracePrintf(10, "process %d: executing Brk()\n", active->pid);
+
+    uintptr_t curbrk;
+    struct pte *pt0;
+    int start_index, end_index;
+    int i;
+
+    // Checks if the specified break address is valid
+    if((uintptr_t) addr < 0 || (uintptr_t) addr >= DOWN_TO_PAGE(sp)) {
+        TracePrintf(10, "Brk: invalid address 0x%x", (uintptr_t) addr);
         return ERROR;
     }
-    if ((uintptr_t)addr > curbrk) {
-        // grow the heap
-        TracePrintf(1, "Grow user heap\n");
-        int start = (curbrk - VMEM_0_BASE) >> PAGESHIFT;
-        int end = (UP_TO_PAGE(addr) - VMEM_0_BASE) >> PAGESHIFT;
-        if (end - start + 1 > free_npg) {
-            // we don't have enough free pages, return error
-            TracePrintf(1, "Warning: no more memory available\n");
-            TracePrintf(1, "Avalable pages: %d\n", free_npg);
-            TracePrintf(1, "From page %d to page %d\n", start, end);
+
+    // Gets the current program break
+    curbrk = active->brk;
+
+    // Accesses the region 0 page table of the process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
+
+    // Case 1 : grow the heap
+    if((uintptr_t) addr > curbrk) {
+        TracePrintf(10, "Brk: growing user heap\n");
+
+        // Finds the range of pages to be allocated
+        start_index = (curbrk - VMEM_0_BASE) >> PAGESHIFT;
+        end_index = (UP_TO_PAGE(addr) - VMEM_0_BASE) >> PAGESHIFT;
+
+        // Checks if there are enough free pages
+        if(end_index - start_index + 1 > free_npg) {
+            TracePrintf(10, "Brk: not enough free memory\n");
             return ERROR;
         }
 
-        int i;
-        for (i = start; i < end; i++) {
-            if (pt0[i].valid) {
-                // this shouldn't happen
-                TracePrintf(1, "Error: valid page found above current brk\n");
-                return ERROR;
-            }
+        // Gets these pages
+        for(i = start_index; i < end_index; i++) {
             pt0[i].valid = 1;
+            pt0[i].pfn = GetPage();
             pt0[i].kprot = PROT_READ | PROT_WRITE;
             pt0[i].uprot = PROT_READ | PROT_WRITE;
-            pt0[i].pfn = GetPage();
-        }
-    } else {
-        // shrink the heap
-        TracePrintf(1, "Shrink user heap\n");
-        int start = (UP_TO_PAGE(addr) - VMEM_0_BASE) >> PAGESHIFT;
-        int end = (curbrk - VMEM_0_BASE) >> PAGESHIFT;
-
-        int i;
-        for (i = start; i < end; i++) {
-            if (pt0[i].valid) {
-                FreePage(i, pt0[i].pfn);
-                pt0[i].valid = 0;
-            }
         }
     }
-    
+
+    // Case 2 : shrink the heap
+    if((uintptr_t) addr < curbrk) {
+        TracePrintf(10, "Brk: shrinking user heap\n");
+
+        // Finds the range of pages to be deallocated
+        start_index = (UP_TO_PAGE(addr) - VMEM_0_BASE) >> PAGESHIFT;
+        end_index = (curbrk - VMEM_0_BASE) >> PAGESHIFT;
+
+        // Frees these pages
+        for(i = start_index; i < end_index; i++) {
+            pt0[i].kprot = PROT_WRITE;
+            FreePage(i, pt0[i].pfn);
+            pt0[i].valid = 0;
+        }
+    }
+
+    // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+
+    // Updates the break for the current process
     active->brk = (uintptr_t)(UP_TO_PAGE(addr));
+
     return 0;
 }
 
-int KernelDelay(int clock_ticks) {
-    TracePrintf(0, "Entering delay kernel call\n");
+
+/* Blocks the currently active process for a while */
+int KernelDelay (int clock_ticks) {
+    TracePrintf(10, "process %d: executing Delay()\n", active->pid);
+
+    // Checks for an invalid number of clock ticks
+    if(clock_ticks < 0)
+        return ERROR;
+
+    // Checks for zero clock ticks
+    if(clock_ticks == 0)
+        return 0;
+
+    // Sets the clock ticks for the current process
     active->clock_ticks = clock_ticks;
+
+    // Marks the process as blocked
     active->state = BLOCKED;
-    enq(&blocked, active);
- 
-    if (qempty(&ready))
-        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) idle_pcb);
+
+    // Gets a process from the ready queue
+    struct pcb *new_process = deq(&ready);
+
+    // Switches to the new process
+    ContextSwitch(Switch, &active->ctxp, (void*) active, (void*) new_process);
 
     return 0;
 }
+
 
 int KernelTtyRead() {
     return 0;

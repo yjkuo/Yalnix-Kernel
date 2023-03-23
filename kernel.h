@@ -18,46 +18,62 @@ typedef enum state_t {RUNNING, READY, BLOCKED} state_t;
 struct pcb {
     unsigned int pid;
     state_t state;
+    uintptr_t ptaddr0;
     uintptr_t brk;
-    unsigned int pfn0;
+    SavedContext ctxp;
     int clock_ticks;
-    SavedContext ctx;
     struct pcb *next;
 };
 
 
-// // Stores the address of the region 1 page table
-// unsigned int pfn1;
-// struct pte *pt1;
+// Stores the interrupt vector table
+ivt_entry_t ivt[TRAP_VECTOR_SIZE];
+
+// Manages a list of free pages
+unsigned int free_head;
+unsigned int free_npg;
+
+// Flag to indicate if virtual memory is enabled
+int vm_enabled;
+
+// Stores the address of the region 1 page table
+uintptr_t ptaddr1;
+struct pte *pt1;
+
+// Stores details of the 'idle' and 'init' processes
+struct pcb idle_pcb;
+struct pcb init_pcb;
+
+// Keeps track of whether the first context switch has been completed
+int first_return;
 
 // Stores the address and index of the borrowed PTE
 void *borrowed_addr;
 int borrowed_index;
 
-// Manages a list of free pages
-// static unsigned int free_head;
-unsigned int free_npg;
+// Keeps track of the last assigned PID
+unsigned int lastpid;
 
-// // Keeps track of the last assigned PID
-// static unsigned int lastpid;
-
-// // Stores the current kernel break address
-// static uintptr_t kernelbrk;
+// Stores the current kernel break address
+uintptr_t kernelbrk;
 
 // Manages the active process
 struct pcb *active;
-struct pcb *idle_pcb;
-// // Flag of vitual memory enabled
-// static int vm_enabled;
+
+// Keeps track of the time quantum for the current process
+unsigned int quantum;
+
 
 // Function prototypes
 int GetPage ();
 void FreePage (int , int );
-void CopyKernelStack(int , int );
-int LoadProgram (char* , char** , ExceptionInfo * , struct pcb* );
-int ExecuteProgram(ExceptionInfo *);
+void BorrowPTE ();
+void ReleasePTE ();
+int NewPageTable (uintptr_t );
+void CopyKernelStack (uintptr_t );
 SavedContext* InitContext (SavedContext* , void* , void* );
 SavedContext* Switch (SavedContext* , void* , void* );
+int LoadProgram (char* , char** , ExceptionInfo* );
 
 
 #endif

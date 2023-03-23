@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #include <comp421/loadinfo.h>
 #include <comp421/hardware.h>
@@ -10,6 +11,7 @@
 
 #include "kernel.h"
 #include "queue.h"
+#include "list.h"
 
 int runtime = 0;
 // Stores the address of the region 1 page table
@@ -29,169 +31,226 @@ static unsigned int lastpid;
 // Stores the current kernel break address
 static uintptr_t kernelbrk;
 
-// Flag of vitual memory enabled
-static int vm_enabled;
-
-/* Kernel boot entry point */
-extern void KernelStart(ExceptionInfo *info, unsigned int pmem_size, void *orig_brk, char **cmd_args) {
-    ivt_entry_t *ivt;
-    struct pte cur_pte;
-    int page_cnt = pmem_size >> PAGESHIFT;
     int i;
-    int pfn;
-    int prev = -1;
     uintptr_t addr;
-    int kernelPageStart;
-    struct pte *pt0;
-    int text_cnt;
-    int heap_cnt;
+    uintptr_t ptaddr0;
+    struct pte *pt;
+    int text_npg;
+    int heap_npg;
+
+    // Stores the original kernel break
     kernelbrk = (uintptr_t) orig_brk;
-    
-    // Initializes the interrupt vector table entries
-    ivt = (ivt_entry_t*) malloc(TRAP_VECTOR_SIZE * sizeof(ivt_entry_t));
-    ivt[TRAP_KERNEL] = &kerHandler;
-    ivt[TRAP_CLOCK] = &clkHandler;
-    ivt[TRAP_ILLEGAL] = &illHandler;
-    ivt[TRAP_MEMORY] = &memHandler;
-    ivt[TRAP_MATH] = &mathHandler;
-    ivt[TRAP_TTY_TRANSMIT] = &ttyXmitHandler;
-    ivt[TRAP_TTY_RECEIVE] = &ttyRecvHandler;
+    TracePrintf(0, "KernelStart: set kernel break to 0x%x\n", kernelbrk);
+
+    // Initializes the IVT entries
+    for(i = 0; i < TRAP_VECTOR_SIZE; i++)
+        ivt[i] = NULL;
+    ivt[TRAP_KERNEL] = &KernelHandler;
+    ivt[TRAP_CLOCK] = &ClockHandler;
+    ivt[TRAP_ILLEGAL] = &IllegalHandler;
+    ivt[TRAP_MEMORY] = &MemoryHandler;
+    ivt[TRAP_MATH] = &MathHandler;
+    ivt[TRAP_TTY_TRANSMIT] = &TtyTransmitHandler;
+    ivt[TRAP_TTY_RECEIVE] = &TtyReceiveHandler;
 
     // Initializes the vector base register to point to the IVT
     WriteRegister(REG_VECTOR_BASE, (RCS421RegVal) ivt);
-    
-    //allocate memory for region 0 page table 
-    pfn = MEM_INVALID_PAGES;
-    addr = pfn << PAGESHIFT;
-    pt0 = (struct pte *)addr;
-    WriteRegister(REG_PTR0, (RCS421RegVal) pt0);
 
-    //allocate memory for region 1 page table 
-    addr = (pfn << PAGESHIFT) + (PAGESIZE >> 1);
-    pt1 = (struct pte *)addr;
-    WriteRegister(REG_PTR1, (RCS421RegVal) pt1);
+    // Initializes the free page list
+    free_head = INT_MAX;
 
-    // construct free pages list
-    for (i = MEM_INVALID_PAGES + 1; i < (KERNEL_STACK_BASE - PMEM_BASE) >> PAGESHIFT; i++) {     
-        addr = (i << PAGESHIFT) + PMEM_BASE;
-        *(int *)addr = prev;
-        prev = i;
+    // Adds pages below the kernel stack to the list of free pages (skipping the first MEM_INVALID_PAGES + 1 pages)
+    addr = PMEM_BASE + MEM_INVALID_SIZE + PAGESIZE;
+    for(; addr < KERNEL_STACK_BASE; addr += PAGESIZE) {
+        *(unsigned int*) addr = free_head;
+        free_head = (addr - PMEM_BASE) >> PAGESHIFT;
         free_npg++;
-    } 
+    }
 
-    kernelPageStart = i;
-
-    for (i = (UP_TO_PAGE(kernelbrk) - PMEM_BASE) >> PAGESHIFT; i < page_cnt; i++) {
-        addr = (i << PAGESHIFT) + PMEM_BASE;
-        *(int *)addr = prev;
-        prev = i;
+    // Adds pages above the kernel break to the list of free pages
+    addr = UP_TO_PAGE(kernelbrk);
+    for(; addr < PMEM_BASE + pmem_size; addr += PAGESIZE) {
+        *(unsigned int*) addr = free_head;
+        free_head = (addr - PMEM_BASE) >> PAGESHIFT;
         free_npg++;
-
     }
 
-    free_head = prev;
+    // Allocates memory for an initial region 0 page table
+    ptaddr0 = PMEM_BASE + MEM_INVALID_SIZE + (PAGESIZE >> 1);
+    pt = (struct pte*) ptaddr0;
+    WriteRegister(REG_PTR0, (RCS421RegVal) pt);
 
-    // create region 0 page table
-    for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
-        cur_pte.valid = 0;
-        *(pt0++) = cur_pte;
+    // Creates the region 0 page table
+    for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
+        pt[i].valid = 0;
+    for(; i < PAGE_TABLE_LEN; i++) {
+        pt[i].valid = 1;
+        pt[i].pfn = i;
+        pt[i].kprot = PROT_READ | PROT_WRITE;
+        pt[i].uprot = PROT_NONE;
     }
 
-    for (i = 0; i < KERNEL_STACK_PAGES; i++) {
-        cur_pte.valid = 1;
-        cur_pte.pfn = kernelPageStart++;
-        cur_pte.kprot = PROT_READ | PROT_WRITE;
-        cur_pte.uprot = PROT_NONE;
-        *(pt0++) = cur_pte;
-    }
-    
-    // create region 1 page table
-    text_cnt = ((long)&_etext - VMEM_1_BASE) >> PAGESHIFT;
-    heap_cnt = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
+    // Calculates the number of text and heap pages used by the kernel
+    text_npg = ((uintptr_t) &_etext - VMEM_1_BASE) >> PAGESHIFT;
+    heap_npg = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
+    TracePrintf(0, "KernelStart: text_npg %d, heap_npg %d\n", text_npg, heap_npg);
 
-    for (i = 0; i < heap_cnt; i++) {
-        cur_pte.valid = 1;
-        cur_pte.pfn = kernelPageStart++;
-        cur_pte.kprot = (i < text_cnt) ? (PROT_READ |  PROT_EXEC) : (PROT_READ | PROT_WRITE);
-        cur_pte.uprot = PROT_NONE;
-        *(pt1++) = cur_pte;
+    // Allocates memory for the region 1 page table
+    ptaddr1 = PMEM_BASE + MEM_INVALID_SIZE;
+    pt = (struct pte*) ptaddr1;
+    WriteRegister(REG_PTR1, (RCS421RegVal) pt);
+
+    // Creates the region 1 page table
+    for(i = 0; i < text_npg; i++) {
+        pt[i].valid = 1;
+        pt[i].pfn = PAGE_TABLE_LEN + i;
+        pt[i].kprot = PROT_READ | PROT_EXEC;
+        pt[i].uprot = PROT_NONE;
     }
-    
-    for (; i < PAGE_TABLE_LEN - 1; i++) {
-        cur_pte.valid = 0;
-        *(pt1++) = cur_pte;
+    for(; i < heap_npg; i++) {
+        pt[i].valid = 1;
+        pt[i].pfn = PAGE_TABLE_LEN + i;
+        pt[i].kprot = PROT_READ | PROT_WRITE;
+        pt[i].uprot = PROT_NONE;
     }
-    // set top PTE of region 1 page table to map to page table location
-    cur_pte.valid = 1;
-    cur_pte.pfn = pfn;
-    cur_pte.kprot = PROT_READ | PROT_WRITE;
-    cur_pte.uprot = PROT_NONE;
-    *pt1 = cur_pte;
+    for(; i < PAGE_TABLE_LEN; i++)
+        pt[i].valid = 0;
+
+    // Sets the top PTE of the region 1 page table to map to itself
+    pt[PAGE_TABLE_LEN - 1].valid = 1;
+    pt[PAGE_TABLE_LEN - 1].pfn = ptaddr1 >> PAGESHIFT;
+    pt[PAGE_TABLE_LEN - 1].kprot = PROT_READ | PROT_WRITE;
+    pt[PAGE_TABLE_LEN - 1].uprot = PROT_NONE;
 
     // Enables virtual memory
     WriteRegister(REG_VM_ENABLE, 1);
     vm_enabled = 1;
 
+    // Stores the virtual address of the region 1 page table
+    pt1 = (struct pte*)(VMEM_1_LIMIT - PAGESIZE);
+
+    // Initializes the ready and blocked queues
     qinit(&ready);
-    qinit(&blocked);
+    linit(&blocked);
 
-    borrowed_addr = (void*)(VMEM_1_LIMIT - (PAGESIZE << 1));
-    borrowed_index = PAGE_TABLE_LEN - 2;
-    
-    idle_pcb = (struct pcb *) malloc(sizeof(struct pcb));
-    idle_pcb->pid = lastpid++;
-    idle_pcb->pfn0 = pfn;
-    idle_pcb->state = READY;
-    idle_pcb->next = NULL;
-    active = idle_pcb;
-    char *args[] = {"idle", NULL};
-    LoadProgram("idle", args, info, idle_pcb);
+    // Initializes the borrowed address and index
+    borrowed_addr = (void*)(VMEM_1_LIMIT - PAGESIZE);
+    borrowed_index = PAGE_TABLE_LEN - 1;
 
-    struct pcb *init_pcb = (struct pcb*) malloc(sizeof(struct pcb));
-    init_pcb->pid = lastpid++;
-    init_pcb->pfn0 = GetPage();
-    init_pcb->state = RUNNING;
-    init_pcb->next = NULL;
+    // Adds the first MEM_INVALID_PAGES pages to the list of free pages
+    for(addr = PMEM_BASE; addr < PMEM_BASE + MEM_INVALID_SIZE; addr += PAGESIZE) {
 
-    ContextSwitch(InitContext, &idle_pcb->ctx, NULL, (void *) init_pcb);
-    if (runtime == 0) {
-        // First time return from context switch
-        runtime++;
-        active = init_pcb;
-        char *args2[] = {"init", NULL};
-        LoadProgram("init", args2, info, init_pcb);
+        // Puts the address in the region 1 page table
+        BorrowPTE();
+        pt1[borrowed_index].pfn = (addr - PMEM_BASE) >> PAGESHIFT;
+
+        // Adds it to the list
+        *(unsigned int*) borrowed_addr = free_head;
+        free_head = (addr - PMEM_BASE) >> PAGESHIFT;
+        free_npg++;
+
+        // Removes the address from the page table
+        ReleasePTE();
+    }
+
+    // Prints out the total number of free pages
+    TracePrintf(0, "KernelStart: free_npg %d\n", free_npg);
+
+    // Creates the idle process
+    idle_pcb.pid = lastpid++;
+    idle_pcb.state = READY;
+    idle_pcb.ptaddr0 = ptaddr0;
+    idle_pcb.clock_ticks = -1;
+    idle_pcb.next = NULL;
+
+    // Temporarily sets idle to be the active process
+    active = &idle_pcb;
+
+    // Loads the idle process
+    char *args_idle[] = {"idle", NULL};
+    LoadProgram("idle", args_idle, info);
+    active = NULL;
+
+    // Creates the init process
+    init_pcb.pid = lastpid++;
+    init_pcb.state = RUNNING;
+    init_pcb.ptaddr0 = NewPageTable(ptaddr0);
+    init_pcb.clock_ticks = -1;
+    init_pcb.next = NULL;
+
+    // Adds idle to the ready queue
+    enq(&ready, &idle_pcb);
+
+    // Makes init the currently active process
+    active = &init_pcb;
+
+    // Initializes the saved context switch for the idle process
+    ContextSwitch(InitContext, &idle_pcb.ctxp, NULL, &init_pcb);
+
+    // Stops executing if the first context switch has been completed
+    if(first_return)
+        return;
+    first_return = 1;
+
+    // Checks if an init program was specified
+    if(cmd_args[0])
+        LoadProgram(cmd_args[0], cmd_args, info);
+
+    // Else, loads the default 'init' program
+    else {
+        char *args_init[] = {"init", NULL};
+        LoadProgram("init", args_init, info);
     }
 }
 
-extern int SetKernelBrk(void *addr) {
-    TracePrintf(1, "Set kernel brk Called\n");
-    if (vm_enabled == 1) {
-        TracePrintf(1, "Set kernel brk after VM enabled\n");
-        struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-        if ((uintptr_t) addr > kernelbrk) {
-            // grow the kernel heap
-            TracePrintf(1, "Grow heap\n");
-            int start = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
-            int end = (UP_TO_PAGE(addr) - VMEM_1_BASE) >> PAGESHIFT;
-            if (end - start - 1 > free_npg) {
-                // we don't have enough free pages, return error
+
+/* Sets the break address for the kernel */
+extern int SetKernelBrk (void *addr) {
+    TracePrintf(0, "executing SetKernelBrk()\n");
+
+    int start_index, end_index;
+    int i;
+
+    // Case 1 : virtual memory has already been enabled
+    if(vm_enabled) {
+        TracePrintf(0, "SetKernelBrk: VM enabled\n");
+
+        // Confirms that the specified address is higher than the current break
+        if((uintptr_t) addr > kernelbrk) {
+
+            // Finds the range of pages to be allocated
+            start_index = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
+            end_index = (UP_TO_PAGE(addr) - VMEM_1_BASE) >> PAGESHIFT;
+
+            // Checks if there are enough free pages
+            if(end_index - start_index + 5 > free_npg) {
+                TracePrintf(0, "SetKernelBrk: not enough free memory\n");
                 return -1;
             }
 
-            int i;
-            for (i = start; i < end; i++) {
+            // Gets these pages
+            for(i = start_index; i < end_index; i++) {
                 pt1[i].valid = 1;
+                pt1[i].pfn = GetPage();
                 pt1[i].kprot = PROT_READ | PROT_WRITE;
                 pt1[i].uprot = PROT_NONE;
-                pt1[i].pfn = GetPage();
             }
         }
-        
+
+        // Flushes all region 1 entries from the TLB
         WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_1);
     }
+
+    // Case 2 : virtual memory has not yet been enabled
+    else
+        TracePrintf(0, "SetKernelBrk: VM not enabled\n");
+
+    // Updates the current break
     kernelbrk = (uintptr_t) addr;
+
     return 0;
 }
+
 
 /* Gets a free page from the free page list */
 int GetPage () {
@@ -200,11 +259,8 @@ int GetPage () {
     int pfn = free_head;
 
     // Borrows a PTE from the top of the region 1 page table
-    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-
-    ptr[borrowed_index].valid = 1;
-    ptr[borrowed_index].kprot = PROT_READ;
-    ptr[borrowed_index].pfn = pfn;
+    BorrowPTE();
+    pt1[borrowed_index].pfn = pfn;
 
     // Moves to the next page in the list
     unsigned int *addr = (unsigned int*) borrowed_addr;
@@ -213,9 +269,8 @@ int GetPage () {
     // Decrements the number of free pages
     free_npg--;
 
-    // Returns the borrowed PTE
-    ptr[borrowed_index].valid = 0;
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
+    // Frees the borrowed PTE
+    ReleasePTE();
 
     // Returns the PFN
     return pfn;
@@ -226,7 +281,7 @@ int GetPage () {
 void FreePage (int index, int pfn) {
 
     // Computes the virtual address of the page
-    unsigned int *addr = (unsigned int*)((long)VMEM_0_BASE + index * PAGESIZE);
+    unsigned int *addr = (unsigned int*)((uintptr_t) VMEM_0_BASE + index * PAGESIZE);
 
     // Adds the page to the list
     *addr = free_head;
@@ -274,6 +329,130 @@ void CopyKernelStack(int to_pfn, int isNew) {
     
 }
 
+/* Borrows a new PTE from the region 1 page table */
+void BorrowPTE () {
+
+    // Updates the borrowed address and index
+    borrowed_addr = (void*)((uintptr_t) borrowed_addr - PAGESIZE);
+    borrowed_index--;
+
+    // Initializes the PTE
+    pt1[borrowed_index].valid = 1;
+    pt1[borrowed_index].kprot = PROT_READ | PROT_WRITE;
+}
+
+
+/* Frees a PTE borrowed from the region 1 page table */
+void ReleasePTE () {
+
+    // Frees the PTE
+    pt1[borrowed_index].valid = 0;
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
+
+    // Updates the borrowed address and index
+    borrowed_addr = (void*)((uintptr_t) borrowed_addr + PAGESIZE);
+    borrowed_index++;
+}
+
+
+/* Creates a new page table */
+int NewPageTable (uintptr_t addr) {
+
+    unsigned int pfn;
+    int i;
+    struct pte *old_addr, *new_addr;
+    void *virtual_addr;
+
+    // Gets a new page for the page table
+    pfn = GetPage();
+
+    // Accesses the region 0 page table of the old process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (addr - PMEM_BASE) >> PAGESHIFT;
+    old_addr = (struct pte*) (borrowed_addr + ((addr - PMEM_BASE) & PAGEOFFSET));
+
+    // Accesses the region 0 page table of the new process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = pfn;
+    new_addr = (struct pte*) borrowed_addr;
+
+    // Copies the page table over
+    memcpy(new_addr, old_addr, PAGE_TABLE_SIZE);
+
+    // Gets new pages for the process space
+    for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
+
+        // Checks if the page is valid
+        if(!new_addr[i].valid)
+            continue;
+
+        // Gets a new page
+        new_addr[i].pfn = GetPage();
+
+        // Accesses this new page
+        BorrowPTE();
+        pt1[borrowed_index].pfn = new_addr[i].pfn;
+
+        // Accesses the old page
+        virtual_addr = (void*)((uintptr_t) VMEM_0_BASE + i * PAGESIZE);
+
+        // Copies the page over
+        memcpy(borrowed_addr, virtual_addr, PAGESIZE);
+
+        // Removes all TLB references to the new page
+        ReleasePTE();
+    }
+
+    // Frees the borrowed PTEs
+    ReleasePTE();
+    ReleasePTE();
+
+    // Flushes the invalidated TLB entry
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) old_addr);
+
+    // Returns the physical address of the new table
+    return (PMEM_BASE + (pfn << PAGESHIFT));
+}
+
+
+/* Copies the kernel stack to a new page table */
+void CopyKernelStack (uintptr_t addr) {
+
+    int i;
+    struct pte *pt_addr;
+    void *virtual_addr;
+
+    // Accesses the region 0 page table of the process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (addr - PMEM_BASE) >> PAGESHIFT;
+    pt_addr = (struct pte*) (borrowed_addr + ((addr - PMEM_BASE) & PAGEOFFSET));
+
+    // Gets new pages for the kernel stack
+    for(i = PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i < PAGE_TABLE_LEN; i++) {
+    
+        // Accesses a new page
+        BorrowPTE();
+        pt1[borrowed_index].pfn = GetPage();
+
+        // Copies the old page over
+        virtual_addr = (void*)((uintptr_t) VMEM_0_BASE + i * PAGESIZE);
+        memcpy(borrowed_addr, virtual_addr, PAGESIZE);
+
+        // Replaces the old page with the new one
+        pt_addr[i].pfn = pt1[borrowed_index].pfn;
+
+        // Removes all TLB references to the new page
+        ReleasePTE();
+    }
+
+    // Frees the borrowed PTE
+    ReleasePTE();
+
+    // Flushes the invalidated TLB entry
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt_addr);
+}
+
+
 /* Helps initialize a saved context */
 SavedContext* InitContext (SavedContext *ctxp, void *p1, void *p2) {
     
@@ -287,6 +466,22 @@ SavedContext* InitContext (SavedContext *ctxp, void *p1, void *p2) {
     
     // Switches to the region 0 page table of process 2
     addr = pcb2->pfn0 << PAGESHIFT;
+    WriteRegister(REG_PTR0, (RCS421RegVal) addr);
+
+    // Flushes all region 0 entries from the TLB
+    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+
+    struct pcb *process;
+    uintptr_t addr;
+
+    // Gets the PCB for the process
+    process = (struct pcb*) p2;
+
+    // Copies the contents of the kernel stack
+    CopyKernelStack(process->ptaddr0);
+
+    // Switches to the region 0 page table of the process
+    addr = process->ptaddr0;
     WriteRegister(REG_PTR0, (RCS421RegVal) addr);
 
     // Flushes all region 0 entries from the TLB
@@ -311,14 +506,14 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     if(pcb1->state == READY)
         enq(&ready, pcb1);
     if(pcb1->state == BLOCKED)
-        enq(&blocked, pcb1);
+        insertl(&blocked, pcb1);
 
-    // Makes process 2 the active process
+    // Makes the second process active
     pcb2->state = RUNNING;
     active = pcb2;
-    
-    // Switches to the region 0 page table of process 2
-    addr = pcb2->pfn0 << PAGESHIFT;
+
+    // Switches to the region 0 page table of the second process
+    addr = pcb2->ptaddr0;
     WriteRegister(REG_PTR0, (RCS421RegVal) addr);
 
     // Flushes all region 0 entries from the TLB
@@ -413,14 +608,12 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
         return -1;
     }
 
-    // Borrows another PTE from the top of the region 1 page table so it won't overlap with GetPage()
-    struct pte *ptr = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-    ptr[borrowed_index - 1].valid = 1;
-    ptr[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
-    ptr[borrowed_index - 1].pfn = active->pfn0;
-    
-    // Accesses the active procees region 0 page table
-    pt0 = (struct pte*) (VMEM_1_LIMIT - PAGESIZE * 3);
+    // Borrows a PTE from the top of the region 1 page table
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+
+    // Accesses the region 0 page table
+    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
 
     // Makes sure there will be enough physical memory to load the new program
     available_npg = free_npg;
@@ -431,8 +624,8 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
         TracePrintf(0, "LoadProgram: program '%s' size too large for PHYSICAL memory\n", name);
         free(argbuf);
         close(fd);
-        ptr[borrowed_index - 1].valid = 0;
-        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - PAGESIZE * 3));
+        ReleasePTE();
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
         return -1;
     }
 
@@ -442,6 +635,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
         if(pt0[i].valid) {
+            pt0[i].kprot = PROT_WRITE;
             FreePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }
@@ -455,35 +649,35 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
     total_npg += text_npg;
     for(; i < total_npg; i++) {
         pt0[i].valid = 1;
+        pt0[i].pfn = GetPage();
         pt0[i].kprot = PROT_READ | PROT_WRITE;
         pt0[i].uprot = PROT_READ | PROT_EXEC;
-        pt0[i].pfn = GetPage();
     }
 
     // Fills in the page table with the right number of data and bss pages
     total_npg += data_bss_npg;
     for(; i < total_npg; i++) {
         pt0[i].valid = 1;
+        pt0[i].pfn = GetPage();
         pt0[i].kprot = PROT_READ | PROT_WRITE;
         pt0[i].uprot = PROT_READ | PROT_WRITE;
-        pt0[i].pfn = GetPage();
     }
 
-    // Initialize brk of the current process
-    pcbp->brk = (uintptr_t)(i << PAGESHIFT);
+    // Initialize the program break for the current process
+    active->brk = (uintptr_t)(total_npg << PAGESHIFT);
 
     // Marks all pages in the subsequent gap as invalid
     total_npg = (USER_STACK_LIMIT >> PAGESHIFT) - stack_npg;
-    for (; i < total_npg; i++)
+    for(; i < total_npg; i++)
         pt0[i].valid = 0;
 
     // Fills in the page table with the right number of user stack pages
     total_npg += stack_npg;
     for(; i < ((long) USER_STACK_LIMIT >> PAGESHIFT); i++) {
         pt0[i].valid = 1;
+        pt0[i].pfn = GetPage();
         pt0[i].kprot = PROT_READ | PROT_WRITE;
         pt0[i].uprot = PROT_READ | PROT_WRITE;
-        pt0[i].pfn = GetPage();
     }
 
     // Flushes all region 0 entries from the TLB
@@ -494,8 +688,8 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
         TracePrintf(0, "LoadProgram: couldn't read for '%s'\n", name);
         free(argbuf);
         close(fd);
-        ptr[borrowed_index - 1].valid = 0;
-        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - PAGESIZE * 3));
+        ReleasePTE();
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
         return -2;
     }
 
@@ -534,9 +728,9 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
         info->regs[i] = 0;
     info->psr = 0;
 
-    // Returns the borrowed PTE
-    ptr[borrowed_index - 1].valid = 0;
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) (VMEM_1_LIMIT - PAGESIZE * 3));
-    
+    // Returns the borrowed PTE and flushes the entry for the region 0 page table
+    ReleasePTE();
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
     return 0;
 }

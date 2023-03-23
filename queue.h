@@ -10,9 +10,8 @@ struct queue {
     struct pcb *tail;
 };
 
-// Manages the ready and blocked processes
+// Manages the ready processes
 struct queue ready;
-struct queue blocked;
 
 
 // Function prototypes
