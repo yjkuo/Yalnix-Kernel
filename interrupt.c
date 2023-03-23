@@ -2,9 +2,6 @@
 #include <stdlib.h>
 
 #include <comp421/yalnix.h>
-#include "interrupt.h"
-#include "syscall.h"
-#include "queue.h"
 
 #include "interrupt.h"
 #include "syscall.h"

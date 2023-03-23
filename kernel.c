@@ -13,23 +13,9 @@
 #include "queue.h"
 #include "list.h"
 
-int runtime = 0;
-// Stores the address of the region 1 page table
-unsigned int pfn1;
-struct pte *pt1;
 
-// Stores the address and index of the borrowed PTE
-void *borrowed_addr;
-int borrowed_index;
-
-// Manages a list of free pages
-static unsigned int free_head;
-
-// Keeps track of the last assigned PID
-static unsigned int lastpid;
-
-// Stores the current kernel break address
-static uintptr_t kernelbrk;
+/* Kernel boot entry point */
+extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig_brk, char **cmd_args) {
 
     int i;
     uintptr_t addr;
@@ -291,43 +277,6 @@ void FreePage (int index, int pfn) {
     free_npg++;
 }
 
-/* Copy the current kernel stackt to new page one by one */
-void CopyKernelStack(int to_pfn, int isNew) {
-
-    struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-
-    // pte maps to new pages address
-    pt1[borrowed_index - 1].valid = 1;
-    pt1[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
-    pt1[borrowed_index - 1].uprot = PROT_NONE;
-
-    // pte maps to to_pfn page table
-    pt1[borrowed_index - 2].valid = 1;
-    pt1[borrowed_index - 2].kprot = PROT_READ | PROT_WRITE;
-    pt1[borrowed_index - 2].pfn = to_pfn;
-    
-    void *to_addr = (void *)(VMEM_1_LIMIT - PAGESIZE * 3);
-    struct pte * newpt0 = (struct pte *) (VMEM_1_LIMIT - PAGESIZE * 4);
-    int i;
-    for (i = 0; i < KERNEL_STACK_PAGES; i++) {
-        void *from_addr = (void *)(KERNEL_STACK_BASE + (long) i * PAGESIZE);
-        if (isNew) {
-            pt1[borrowed_index - 1].pfn = GetPage();
-            newpt0[PAGE_TABLE_LEN - KERNEL_STACK_PAGES + i] = pt1[borrowed_index - 1];
-        } else {
-            pt1[borrowed_index - 1].pfn = newpt0[PAGE_TABLE_LEN - KERNEL_STACK_PAGES + i].pfn;
-        }
-        memcpy(to_addr, from_addr, PAGESIZE);
-        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) to_addr);
-    }
-
-    pt1[borrowed_index - 1].valid = 0;
-    pt1[borrowed_index - 2].valid = 0;
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) to_addr);
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) newpt0);
-
-    
-}
 
 /* Borrows a new PTE from the region 1 page table */
 void BorrowPTE () {
@@ -455,21 +404,6 @@ void CopyKernelStack (uintptr_t addr) {
 
 /* Helps initialize a saved context */
 SavedContext* InitContext (SavedContext *ctxp, void *p1, void *p2) {
-    
-    struct pcb *pcb2;
-    uintptr_t addr;
-
-    pcb2 = (struct pcb*) p2;
-
-    // Copy current kernel stack to process 2 region 0 page table
-    CopyKernelStack(pcb2->pfn0, 1);
-    
-    // Switches to the region 0 page table of process 2
-    addr = pcb2->pfn0 << PAGESHIFT;
-    WriteRegister(REG_PTR0, (RCS421RegVal) addr);
-
-    // Flushes all region 0 entries from the TLB
-    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     struct pcb *process;
     uintptr_t addr;
@@ -520,12 +454,12 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Returns the saved context from the second process
-    return &pcb2->ctx;
+    return &pcb2->ctxp;
 }
 
 
 /* Loads a program in the current process's address space */
-int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp) {
+int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     int fd;
     int status;
@@ -673,7 +607,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
 
     // Fills in the page table with the right number of user stack pages
     total_npg += stack_npg;
-    for(; i < ((long) USER_STACK_LIMIT >> PAGESHIFT); i++) {
+    for(; i < total_npg; i++) {
         pt0[i].valid = 1;
         pt0[i].pfn = GetPage();
         pt0[i].kprot = PROT_READ | PROT_WRITE;
@@ -682,7 +616,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info, struct pcb *pcbp)
 
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
-    
+
     // Reads the text and data from the file into memory
     if(read(fd, (void*) MEM_INVALID_SIZE, li.text_size + li.data_size) != li.text_size + li.data_size) {
         TracePrintf(0, "LoadProgram: couldn't read for '%s'\n", name);
