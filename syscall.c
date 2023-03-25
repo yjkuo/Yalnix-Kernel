@@ -3,65 +3,26 @@
 #include <comp421/yalnix.h>
 
 #include "syscall.h"
-#include "queue.h"
-#include "list.h"
 
 int KernelFork(int caller_pid) {
     // if memory is not enough, return ERROR
     // TODO
     TracePrintf(0, "Entering Fork kernel call\n");
-    // struct pcb *child_pcb = (struct pcb *) malloc(sizeof(struct pcb));
-    // child_pcb->pid = lastpid++;
-    // child_pcb->pfn0 = GetPage();
-    // child_pcb->state = RUNNING;
-    // child_pcb->next = NULL;
-    // struct pte *pt1 = (struct pte *)(VMEM_1_LIMIT - (PAGESIZE >> 1));
-
-    // // pte maps to new pages address
-    // pt1[borrowed_index - 1].valid = 1;
-    // pt1[borrowed_index - 1].kprot = PROT_READ | PROT_WRITE;
-    // pt1[borrowed_index - 1].uprot = PROT_NONE;
-    // pt1[borrowed_index - 1].pfn = active->pfn0;
-
-    // // pte maps to new page table
-    // pt1[borrowed_index - 2].valid = 1;
-    // pt1[borrowed_index - 2].kprot = PROT_READ | PROT_WRITE;
-    // pt1[borrowed_index - 2].pfn = child_pcb->pfn0;
     
-    // // ContextSwitch(InitContext, &child_pcb->ctx, (void *) active, (void *) child_pcb);
-    // void *to_addr = (void *)(VMEM_1_LIMIT - PAGESIZE * 3);
-    // struct pte *pt0 = (struct pte *) (VMEM_1_LIMIT - PAGESIZE * 4);
-
-    // // copy the page table first
-    // memcpy(pt0, to_addr, PAGE_TABLE_SIZE);
-
-    // int i;
-    
-    // // copy the entire process to new pages
-    // for (i = 0; i < PAGE_TABLE_LEN; i++) {
-    //     if (pt0[i].valid) {
-    //         WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) to_addr);
-    //         void *from_addr = (void *)(VMEM_0_BASE + (long) i * PAGESIZE);
-    //         pt1[borrowed_index - 1].pfn = GetPage();
-    //         memcpy(to_addr, from_addr, PAGESIZE);
-    //     }
-    // }
-    
-    // pt1[borrowed_index - 1].valid = 0;
-    // pt1[borrowed_index - 2].valid = 0;
-    // WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) to_addr);
-    // WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
     struct pcb *child_pcb = (struct pcb *) malloc(sizeof(struct pcb));
-    child_pcb->pid = lastpid++;
-    child_pcb->ptaddr0 = NewPageTable(active->ptaddr0);
-    child_pcb->state = RUNNING;
-    child_pcb->next = NULL;
+    InitPCB(child_pcb, READY, NewPageTable(active->ptaddr0));
+    child_pcb->brk = active->brk;
+    child_pcb->parent = active;
+
     enq(&ready, child_pcb);
+
+    insertl(&active->children, child_pcb);
+    
     ContextSwitch(InitContext, &child_pcb->ctx, NULL, (void *) active);
     TracePrintf(0, "current process pid: %d, parent process pid %d\n", active->pid, caller_pid);
-    if (active->pid == caller_pid) 
+    if (active->pid == caller_pid) {    
         return child_pcb->pid;
-    else {  
+    } else {  
         WriteRegister(REG_PTR0, (RCS421RegVal) child_pcb->ptaddr0);
         WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
         return 0;
@@ -74,44 +35,50 @@ int KernelExec(char *filename, char **argvec, ExceptionInfo *info) {
 }
 
 void KernelExit(int status) {
-    TracePrintf(0, "Enter Exit kernel call\n");
-
-    // pte maps to new pages address
-    BorrowPTE();
-    pt1[borrowed_index].pfn = active->ptaddr0 >> PAGESHIFT;
-    struct pte *pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
-
-    int i;
+    TracePrintf(10, "process %d: executing Exit()\n", active->pid);
     
-    // copy the entire process to new pages
-    for (i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++) {
-        if (pt0[i].valid) {
-            pt0[i].kprot = PROT_READ | PROT_WRITE;
-            FreePage(i, pt0[i].pfn);
-            pt0[i].valid = 0;
+    // tell all children parent exits
+    exitl(&active->children);
+    TracePrintf(10, "process %d: executing Exit()\n", active->pid);
+
+    // tell parent my exit status
+    if (active->parent) {
+        deletel(&active->parent->children, active);
+        enq(&active->parent->exited_children, active);
+        active->exit_status = status;
+        
+        // check if there's parent waiting
+        if (active->parent->state == WAITING) {
+            TracePrintf(10, "Child process %d exit before parent process %d execute Wait()\n", active->pid, active->parent->pid);
+            active->parent->state = READY;
+            enq(&ready, active->parent);
         }
     }
-    // int index = PAGE_TABLE_LEN + borrowed_index - 1;
-    // FreePage(index, active->pfn0);
-    ReleasePTE();
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
 
-    if (qempty(&ready)) {
-        TracePrintf(0, "nobody in ready queue\n");
-        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) &idle_pcb);
-    } else {
-        struct pcb *newpcb = deq(&ready);
-        struct pcb tmp;
-        free(active);
-        TracePrintf(0, "done free page\n");
-        TracePrintf(0, "new pid %d, state %d\n", newpcb->pid, newpcb->state);
-        ContextSwitch(Switch, &tmp.ctx, NULL, (void *) newpcb);
-        TracePrintf(0, "Cannot happen\n");
-    }
+    struct pcb *new_process = qempty(&ready) ? &idle_pcb : deq(&ready);
+    active->state = TERMINATED;
+    ContextSwitch(Switch, &active->ctx, (void *) active, (void *) new_process);
+    
 }
 
-int KernelWait() {
-    return 0;
+int KernelWait(int *status_ptr) {
+
+    if (lempty(active->children) && qempty(&active->exited_children)) 
+        return ERROR;
+
+    if (!lempty(active->children)) {
+        struct pcb *new_process = qempty(&ready) ? &idle_pcb : deq(&ready);
+        active->state = WAITING;
+        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) new_process); 
+    }
+
+    if (!qempty(&active->exited_children)) {
+        struct pcb *child = deq(&active->exited_children);
+        free(child);
+        *status_ptr = child->exit_status;
+        return child->pid;
+    }
+    return ERROR;
 }
 
 
@@ -139,7 +106,7 @@ int KernelBrk (void *addr, void *sp) {
 
     // Gets the current program break
     curbrk = active->brk;
-
+    TracePrintf(0, "Current process brk at %p\n", curbrk);
     // Accesses the region 0 page table of the process
     BorrowPTE();
     pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
@@ -212,20 +179,16 @@ int KernelDelay (int clock_ticks) {
     // Marks the process as blocked
     active->state = BLOCKED;
 
-    // Gets a process from the ready queue
-    struct pcb *new_process = deq(&ready);
+    // // Gets a process from the ready queue
+    // struct pcb *new_process = deq(&ready);
 
-    // Switches to the new process
+    // // Switches to the new process
     // ContextSwitch(Switch, &active->ctxp, (void*) active, (void*) new_process);
     
-    if (qempty(&ready)) {
-        TracePrintf(0, "nobody in ready queue\n");
-        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) &idle_pcb);
-    } else {
-        struct pcb *pcb = deq(&ready);
-        TracePrintf(0, "Take %d out from ready queue\n", pcb->pid);
-        ContextSwitch(Switch, &active->ctx, (void *) active, (void *) pcb);
-    }
+    struct pcb *new_process = qempty(&ready) ? &idle_pcb : deq(&ready);
+    
+    ContextSwitch(Switch, &active->ctx, (void *) active, (void *) new_process);
+    
     return 0;
 }
 

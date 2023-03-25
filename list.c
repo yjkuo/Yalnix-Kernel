@@ -35,6 +35,15 @@ void clockl (list *l) {
 	}
 }
 
+/* Updates the parent pointer for all processes in a list */
+void exitl (list *l) {
+	struct pcb *ptr = *l;
+	while(ptr) {
+		ptr->parent = NULL;
+		ptr = ptr->next;
+	}
+}
+
 /* Returns a process that is done blocking */
 struct pcb* readyl (list *l) {
 	struct pcb *ptr = *l;

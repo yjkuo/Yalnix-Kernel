@@ -8,10 +8,12 @@
 #include <comp421/yalnix.h>
 
 #include "interrupt.h"
+#include "list.h"
+#include "queue.h"
 
 
 // States a process may be in
-typedef enum state_t {RUNNING, READY, BLOCKED} state_t;
+typedef enum state_t {RUNNING, READY, BLOCKED, WAITING, TERMINATED} state_t;
 
 
 // Structure of a PCB
@@ -22,6 +24,11 @@ struct pcb {
     uintptr_t brk;
     SavedContext ctx;
     int clock_ticks;
+    int exit_status;
+    int used_npg;
+    struct pcb *parent;
+    list children;
+    struct queue exited_children;
     struct pcb *next;
 };
 
@@ -71,6 +78,8 @@ void BorrowPTE ();
 void ReleasePTE ();
 int NewPageTable (uintptr_t );
 void CopyKernelStack (uintptr_t );
+void FreeProcess(struct pcb* );
+void InitPCB(struct pcb* , state_t , uintptr_t );
 SavedContext* InitContext (SavedContext* , void* , void* );
 SavedContext* Switch (SavedContext* , void* , void* );
 int LoadProgram (char* , char** , ExceptionInfo* );

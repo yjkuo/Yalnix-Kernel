@@ -18,19 +18,19 @@ void KernelHandler (ExceptionInfo *info) {
         case YALNIX_EXEC:
             KernelExec((char *) info->regs[1], (char **) info->regs[2], info);
             break;
+            
         case YALNIX_FORK:
-            TracePrintf(1, "pc: %p\n", info->pc);
-            TracePrintf(1, "sp: %p\n", info->sp);
             info->regs[0] = KernelFork(active->pid);
-            TracePrintf(1, "pc: %p\n", info->pc);
-            TracePrintf(1, "sp: %p\n", info->sp);
             break;		
+
         case YALNIX_EXIT:
             KernelExit((int) info->regs[1]);
             break;
-        // case YALNIX_WAIT:
-        //     KernelWait();
-        //     break;
+
+        case YALNIX_WAIT:
+            info->regs[0] = KernelWait((int *) info->regs[1]);
+            break;
+
         case YALNIX_GETPID:
             info->regs[0] = KernelGetPid();
             break;
@@ -68,14 +68,16 @@ void ClockHandler (ExceptionInfo *info) {
     if(!quantum) {
 
         // Checks if the ready queue has a process
-        if(qempty(&ready))
-            return;
+        // if(qempty(&ready))
+        //     return;
 
         // Marks the current process as ready
-        active->state = READY;
+        if (active->pid > 0)
+            active->state = READY;
 
         // Gets a process from the ready queue
-        struct pcb *new_process = deq(&ready);
+        // struct pcb *new_process = deq(&ready);
+        struct pcb *new_process = qempty(&ready) ? &idle_pcb : deq(&ready);
 
         // Switches to the new process
         ContextSwitch(Switch, &active->ctx, (void*) active, (void*) new_process);

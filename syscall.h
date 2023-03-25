@@ -9,7 +9,7 @@
 int KernelFork(int );
 int KernelExec(char* , char** , ExceptionInfo* );
 void KernelExit(int );
-int KernelWait();
+int KernelWait(int* );
 int KernelGetPid();
 int KernelBrk(void *addr, void *sp);
 int KernelDelay(int);

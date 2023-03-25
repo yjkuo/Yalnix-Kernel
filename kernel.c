@@ -143,11 +143,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     TracePrintf(0, "KernelStart: free_npg %d\n", free_npg);
 
     // Creates the idle process
-    idle_pcb.pid = lastpid++;
-    idle_pcb.state = READY;
-    idle_pcb.ptaddr0 = ptaddr0;
-    idle_pcb.clock_ticks = -1;
-    idle_pcb.next = NULL;
+    InitPCB(&idle_pcb, RUNNING, ptaddr0);
 
     // Temporarily sets idle to be the active process
     active = &idle_pcb;
@@ -158,14 +154,10 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     active = NULL;
 
     // Creates the init process
-    init_pcb.pid = lastpid++;
-    init_pcb.state = RUNNING;
-    init_pcb.ptaddr0 = NewPageTable(ptaddr0);
-    init_pcb.clock_ticks = -1;
-    init_pcb.next = NULL;
+    InitPCB(&init_pcb, RUNNING, NewPageTable(ptaddr0));
 
     // Adds idle to the ready queue
-    enq(&ready, &idle_pcb);
+    // enq(&ready, &idle_pcb);
 
     // Makes init the currently active process
     active = &init_pcb;
@@ -402,6 +394,41 @@ void CopyKernelStack (uintptr_t addr) {
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt_addr);
 }
 
+/* Free all resources of the process except pcb */
+void FreeProcess(struct pcb *pcbp) {
+    BorrowPTE();
+    pt1[borrowed_index].pfn = pcbp->ptaddr0 >> PAGESHIFT;
+    struct pte *pt0 = (struct pte*) (borrowed_addr + ((pcbp->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
+
+    int i;
+    
+    for (i = 0; i < PAGE_TABLE_LEN; i++) {
+        if (pt0[i].valid) {
+            pt0[i].kprot = PROT_READ | PROT_WRITE;
+            FreePage(i, pt0[i].pfn);
+            pt0[i].valid = 0;
+        }
+    }
+    
+    // Free the page table itself
+    FreePage(PAGE_TABLE_LEN + borrowed_index, pt1[borrowed_index].pfn);
+    ReleasePTE();
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+}
+
+/* Helps initialize a pcb */
+void InitPCB(struct pcb *pcb, state_t state, uintptr_t ptaddr0) {
+    pcb->pid = lastpid++;
+    pcb->state = state;
+    pcb->ptaddr0 = ptaddr0;
+    pcb->clock_ticks = -1;
+    pcb->used_npg = 0;
+    pcb->parent = NULL;
+    pcb->next = NULL;
+    linit(&pcb->children);
+    qinit(&pcb->exited_children);
+}
 
 /* Helps initialize a saved context */
 SavedContext* InitContext (SavedContext *ctxp, void *p1, void *p2) {
@@ -442,6 +469,9 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
         enq(&ready, pcb1);
     if(pcb1->state == BLOCKED)
         insertl(&blocked, pcb1);
+    
+    if(pcb1->state == TERMINATED)
+        FreeProcess(pcb1);
 
     // Makes the second process active
     pcb2->state = RUNNING;

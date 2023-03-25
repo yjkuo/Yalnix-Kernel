@@ -2,7 +2,6 @@
 #define QUEUE_H
 
 
-#include "kernel.h"
 
 
 // Structure of a process queue
@@ -11,6 +10,7 @@ struct queue {
     struct pcb *tail;
 };
 
+#include "kernel.h"
 // Manages the ready processes
 struct queue ready;
 

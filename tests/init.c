@@ -63,10 +63,7 @@ int main() {
 
     }
 
-    while(1) {
-        TracePrintf(20, "idle running ...\n");
-        Pause();
-    }
+    Exit(0);
 
     // return 0;
 }
