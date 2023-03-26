@@ -162,8 +162,8 @@ void IllegalHandler (ExceptionInfo *info) {
             TracePrintf(5, "process %d: object-specific HW error\n", active->pid);
             break;
     }
-
-    Halt();
+    
+    KernelExit(ERROR);
 }
 
 
@@ -233,7 +233,7 @@ void MathHandler (ExceptionInfo *info) {
             break;
     }
 
-    Halt();
+    KernelExit(ERROR);
 }
 
 

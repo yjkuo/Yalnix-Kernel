@@ -5,13 +5,18 @@
 #include "syscall.h"
 
 int KernelFork(int caller_pid) {
+    TracePrintf(10, "process %d: executing Fork()\n", active->pid);
+
     // if memory is not enough, return ERROR
-    // TODO
-    TracePrintf(0, "Entering Fork kernel call\n");
+    if (active->used_npg > free_npg) {
+        TracePrintf(10, "Fork: not enough free memory\n");
+        return ERROR;
+    }
     
     struct pcb *child_pcb = (struct pcb *) malloc(sizeof(struct pcb));
     InitPCB(child_pcb, READY, NewPageTable(active->ptaddr0));
     child_pcb->brk = active->brk;
+    child_pcb->used_npg = active->used_npg;
     child_pcb->parent = active;
 
     enq(&ready, child_pcb);
@@ -30,7 +35,18 @@ int KernelFork(int caller_pid) {
 }
 
 int KernelExec(char *filename, char **argvec, ExceptionInfo *info) {
-    LoadProgram(filename, argvec, info);
+    TracePrintf(10, "process %d: executing Exec()\n", active->pid);
+
+    int ret_val = LoadProgram(filename, argvec, info);
+
+    if (ret_val == -1)
+        return ERROR;
+
+    if (ret_val == -2) {
+        TracePrintf(10, "Exec: load program failed\n");
+        return ERROR;
+    }
+
     return 0;
 }
 
@@ -39,7 +55,6 @@ void KernelExit(int status) {
     
     // tell all children parent exits
     exitl(&active->children);
-    TracePrintf(10, "process %d: executing Exit()\n", active->pid);
 
     // tell parent my exit status
     if (active->parent) {
@@ -55,6 +70,10 @@ void KernelExit(int status) {
         }
     }
 
+    if (lempty(blocked) && qempty(&ready)) {
+        TracePrintf(10, "Exit: No remaining processes, shut down the kernel...\n");
+        Halt();
+    }
     struct pcb *new_process = qempty(&ready) ? &idle_pcb : deq(&ready);
     active->state = TERMINATED;
     ContextSwitch(Switch, &active->ctx, (void *) active, (void *) new_process);
@@ -133,6 +152,7 @@ int KernelBrk (void *addr, void *sp) {
             pt0[i].kprot = PROT_READ | PROT_WRITE;
             pt0[i].uprot = PROT_READ | PROT_WRITE;
         }
+        active->used_npg += end_index - start_index;
     }
 
     // Case 2 : shrink the heap
@@ -149,6 +169,7 @@ int KernelBrk (void *addr, void *sp) {
             FreePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }
+        active->used_npg -= end_index - start_index;
     }
 
     // Flushes all region 0 entries from the TLB

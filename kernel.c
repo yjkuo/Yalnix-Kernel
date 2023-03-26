@@ -630,6 +630,9 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Initialize the program break for the current process
     active->brk = (uintptr_t)(total_npg << PAGESHIFT);
 
+    // Initialize number of pages used by the program
+    active->used_npg = text_npg + data_bss_npg + stack_npg + KERNEL_STACK_PAGES;
+
     // Marks all pages in the subsequent gap as invalid
     total_npg = (USER_STACK_LIMIT >> PAGESHIFT) - stack_npg;
     for(; i < total_npg; i++)
