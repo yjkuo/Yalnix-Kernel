@@ -8,21 +8,36 @@
 #include <comp421/yalnix.h>
 
 #include "interrupt.h"
+#include "queue.h"
+#include "list.h"
+#include "io.h"
 
 
 // States a process may be in
-typedef enum state_t {RUNNING, READY, BLOCKED} state_t;
+enum state_t {RUNNING, READY, DELAYED, READING, WRITING, WAITING, TERMINATED};
 
 
 // Structure of a PCB
 struct pcb {
     unsigned int pid;
-    state_t state;
+    enum state_t state;
     uintptr_t ptaddr0;
+    int used_npg;
     uintptr_t brk;
-    SavedContext ctxp;
+    SavedContext ctx;
     int clock_ticks;
-    struct pcb *next;
+    struct buffer input_buf;
+    struct buffer output_buf;
+    struct pcb *parent;
+    struct list *running_chd;
+    struct queue *exited_chd;
+    int exit_status;
+};
+
+// Structure of a PCB frame
+struct pcb_frame {
+    struct pcb *proc;
+    struct pcb_frame *next;
 };
 
 
@@ -42,7 +57,7 @@ struct pte *pt1;
 
 // Stores details of the 'idle' and 'init' processes
 struct pcb idle_pcb;
-struct pcb init_pcb;
+struct pcb *init_pcb;
 
 // Keeps track of whether the first context switch has been completed
 int first_return;
@@ -71,6 +86,9 @@ void BorrowPTE ();
 void ReleasePTE ();
 int NewPageTable (uintptr_t );
 void CopyKernelStack (uintptr_t );
+void InitProcess (struct pcb* , enum state_t , uintptr_t );
+struct pcb* MoveProcesses (enum state_t , void* );
+void RemoveProcess (struct pcb* );
 SavedContext* InitContext (SavedContext* , void* , void* );
 SavedContext* Switch (SavedContext* , void* , void* );
 int LoadProgram (char* , char** , ExceptionInfo* );

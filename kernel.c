@@ -12,6 +12,7 @@
 #include "kernel.h"
 #include "queue.h"
 #include "list.h"
+#include "io.h"
 
 
 /* Kernel boot entry point */
@@ -36,8 +37,8 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     ivt[TRAP_ILLEGAL] = &IllegalHandler;
     ivt[TRAP_MEMORY] = &MemoryHandler;
     ivt[TRAP_MATH] = &MathHandler;
-    ivt[TRAP_TTY_TRANSMIT] = &TtyTransmitHandler;
     ivt[TRAP_TTY_RECEIVE] = &TtyReceiveHandler;
+    ivt[TRAP_TTY_TRANSMIT] = &TtyTransmitHandler;
 
     // Initializes the vector base register to point to the IVT
     WriteRegister(REG_VECTOR_BASE, (RCS421RegVal) ivt);
@@ -115,10 +116,6 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     // Stores the virtual address of the region 1 page table
     pt1 = (struct pte*)(VMEM_1_LIMIT - PAGESIZE);
 
-    // Initializes the ready and blocked queues
-    qinit(&ready);
-    linit(&blocked);
-
     // Initializes the borrowed address and index
     borrowed_addr = (void*)(VMEM_1_LIMIT - PAGESIZE);
     borrowed_index = PAGE_TABLE_LEN - 1;
@@ -142,14 +139,29 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     // Prints out the total number of free pages
     TracePrintf(0, "KernelStart: free_npg %d\n", free_npg);
 
-    // Creates the idle process
-    idle_pcb.pid = lastpid++;
-    idle_pcb.state = READY;
-    idle_pcb.ptaddr0 = ptaddr0;
-    idle_pcb.clock_ticks = -1;
-    idle_pcb.next = NULL;
+    // Initializes the ready and blocked queues
+    qinit(&ready);
+    linit(&blocked);
 
-    // Temporarily sets idle to be the active process
+    // Initializes the terminals
+    for(i = 0; i < NUM_TERMINALS; i++) {
+
+        // Empties the input buffer
+        memset(&term[i].input_buf, 0, sizeof(struct buffer));
+        term[i].lines = 0;
+
+        // Initializes the waiting queues
+        term[i].read_procs = (struct queue*) malloc(sizeof(struct queue));
+        qinit(term[i].read_procs);
+        term[i].write_procs = (struct queue*) malloc(sizeof(struct queue));
+        qinit(term[i].write_procs);
+
+        // Marks the terminal as ready
+        term[i].term_state = FREE;       
+    }
+
+    // Creates the idle process
+    InitProcess(&idle_pcb, READY, ptaddr0);
     active = &idle_pcb;
 
     // Loads the idle process
@@ -158,20 +170,12 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     active = NULL;
 
     // Creates the init process
-    init_pcb.pid = lastpid++;
-    init_pcb.state = RUNNING;
-    init_pcb.ptaddr0 = NewPageTable(ptaddr0);
-    init_pcb.clock_ticks = -1;
-    init_pcb.next = NULL;
+    init_pcb = (struct pcb*) malloc(sizeof(struct pcb));
+    InitProcess(init_pcb, RUNNING, NewPageTable(ptaddr0));
+    active = init_pcb;
 
-    // Adds idle to the ready queue
-    enq(&ready, &idle_pcb);
-
-    // Makes init the currently active process
-    active = &init_pcb;
-
-    // Initializes the saved context switch for the idle process
-    ContextSwitch(InitContext, &idle_pcb.ctxp, NULL, &init_pcb);
+    // Initializes the saved context for the idle process
+    ContextSwitch(InitContext, &idle_pcb.ctx, init_pcb, NULL);
 
     // Stops executing if the first context switch has been completed
     if(first_return)
@@ -210,7 +214,7 @@ extern int SetKernelBrk (void *addr) {
 
             // Checks if there are enough free pages
             if(end_index - start_index + 5 > free_npg) {
-                TracePrintf(0, "SetKernelBrk: not enough free memory\n");
+                TracePrintf(0, "SetKernelBrk: not enough free pages\n");
                 return -1;
             }
 
@@ -272,6 +276,9 @@ void FreePage (int index, int pfn) {
     // Adds the page to the list
     *addr = free_head;
     free_head = pfn;
+
+    // Flushes the page from the TLB
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
 
     // Increments the number of free pages
     free_npg++;
@@ -402,14 +409,102 @@ void CopyKernelStack (uintptr_t addr) {
 }
 
 
+/* Helps initialize a PCB */
+void InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
+
+    // Initializes the PCB using the passed values
+    pcb->pid = lastpid++;
+    pcb->state = state;
+    pcb->ptaddr0 = addr;
+    pcb->used_npg = 0;
+    pcb->brk = 0;
+    pcb->clock_ticks = -1;
+    memset(&pcb->input_buf, 0, sizeof(struct buffer));
+    memset(&pcb->output_buf, 0, sizeof(struct buffer));
+    pcb->parent = NULL;
+    pcb->running_chd = (struct list*) malloc(sizeof(struct list));
+    linit(pcb->running_chd);
+    pcb->exited_chd = (struct queue*) malloc(sizeof(struct queue));
+    qinit(pcb->exited_chd);
+    pcb->exit_status = 0;
+}
+
+
+/* Switches out the active process for a different process */
+struct pcb* MoveProcesses (enum state_t new_state, void *new_dest) {
+
+    struct pcb *new_process;
+    struct queue *q;
+    struct list *l;
+
+    // Marks the current process as not running
+    active->state = new_state;
+
+    // If necessary, moves the active process to a different list or queue
+    if(new_state == READY || new_state == READING || new_state == WRITING) {
+        q = (struct queue*) new_dest;
+        enq(q, active);
+    }
+    if(new_state == DELAYED || new_state == WAITING) {
+        l = (struct list*) new_dest;
+        insertl(l, active);
+    }
+
+    // Gets a process from the ready queue (or switches to idle)
+    if(qempty(ready))
+        new_process = &idle_pcb;
+    else
+        new_process = deq(&ready);
+
+    // Returns the new process
+    return new_process;
+}
+
+
+/* Frees all the resources of a process except its PCB */
+void RemoveProcess (struct pcb *pcb) {
+
+    int i;
+    struct pte *pt0;
+
+    // Accesses the region 0 page table of the process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (pcb->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+    pt0 = (struct pte*) (borrowed_addr + ((pcb->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
+
+    // Flushes all region 0 entries from the TLB
+    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+
+    for(i = 0; i < PAGE_TABLE_LEN; i++) {
+        if(pt0[i].valid) {
+            pt0[i].kprot = PROT_WRITE;
+            FreePage(i, pt0[i].pfn);
+        }
+    }
+
+    // Free the page table itself
+    FreePage(PAGE_TABLE_LEN + borrowed_index, pt1[borrowed_index].pfn);
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+    // Frees the borrowed PTE
+    ReleasePTE();
+
+    // Destroys the lists of children
+    ldestroy(pcb->running_chd);
+    free(pcb->running_chd);
+    qdestroy(pcb->exited_chd);
+    free(pcb->exited_chd);
+}
+
+
 /* Helps initialize a saved context */
-SavedContext* InitContext (SavedContext *ctxp, void *p1, void *p2) {
+SavedContext* InitContext (SavedContext *ctxp, void *proc, void *unused) {
 
     struct pcb *process;
     uintptr_t addr;
 
     // Gets the PCB for the process
-    process = (struct pcb*) p2;
+    process = (struct pcb*) proc;
 
     // Copies the contents of the kernel stack
     CopyKernelStack(process->ptaddr0);
@@ -436,11 +531,9 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     pcb1 = (struct pcb*) p1;
     pcb2 = (struct pcb*) p2;
 
-    // Moves the first process to a different queue
-    if(pcb1->state == READY)
-        enq(&ready, pcb1);
-    if(pcb1->state == BLOCKED)
-        insertl(&blocked, pcb1);
+    // Releases resources for a terminated process
+    if(pcb1->state == TERMINATED)
+        RemoveProcess(pcb1);
 
     // Makes the second process active
     pcb2->state = RUNNING;
@@ -454,7 +547,7 @@ SavedContext* Switch (SavedContext *ctxp, void *p1, void *p2) {
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Returns the saved context from the second process
-    return &pcb2->ctxp;
+    return &pcb2->ctx;
 }
 
 
@@ -565,6 +658,9 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     // Initializes SP for current process to (void*)cpp
     info->sp = (void*) cpp;
+
+    // Flushes all region 0 entries from the TLB
+    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)

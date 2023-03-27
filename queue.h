@@ -5,10 +5,16 @@
 #include "kernel.h"
 
 
+// Declares structures to allow PCB manipulation
+struct pcb;
+struct pcb_frame;
+
+
 // Structure of a process queue
 struct queue {
-    struct pcb *head;
-    struct pcb *tail;
+    struct pcb_frame *head;
+    struct pcb_frame *tail;
+    int size;
 };
 
 // Manages the ready processes
@@ -19,7 +25,9 @@ struct queue ready;
 void qinit (struct queue* );
 void enq (struct queue* , struct pcb* );
 struct pcb* deq (struct queue* );
-int qempty (struct queue* );
+struct pcb* peekq (struct queue );
+int qempty (struct queue );
+void qdestroy (struct queue* );
 
 
 #endif
