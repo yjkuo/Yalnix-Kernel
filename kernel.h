@@ -40,6 +40,10 @@ ivt_entry_t ivt[TRAP_VECTOR_SIZE];
 unsigned int free_head;
 unsigned int free_npg;
 
+// Manages a heap of free page tables
+uintptr_t *free_tables;
+unsigned int free_size;
+
 // Flag to indicate if virtual memory is enabled
 int vm_enabled;
 

@@ -61,6 +61,9 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         free_npg++;
     }
 
+    free_tables = malloc((pmem_size >> (PAGESHIFT - 1)) * sizeof(uintptr_t));
+    memset(free_tables, 0, sizeof(free_tables));
+
     // Allocates memory for an initial region 0 page table
     ptaddr0 = PMEM_BASE + MEM_INVALID_SIZE + (PAGESIZE >> 1);
     pt = (struct pte*) ptaddr0;
@@ -180,7 +183,59 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         LoadProgram("init", args_init, info);
     }
 }
+uintptr_t GetTable() {
+    if (free_size == 0) {
+        int pfn = GetPage();
+        free_tables[++free_size] = (PMEM_BASE + (pfn << PAGESHIFT) + PAGE_TABLE_SIZE);
+        return (PMEM_BASE + (pfn << PAGESHIFT));
+    }
 
+    uintptr_t remove = free_tables[1];
+    free_tables[1] = free_tables[size];
+    free_size--;
+    int index = 1;
+
+    while (index <= (free_size >> 1)) {
+        int left = index << 1;
+        int right = (index << 1) + 1;
+        if (free_tables[index] < free_tables[left] || free_tables[index] < free_tables[right]) {
+            if (free_tables[index] < free_tables[left]) {
+                uintptr_t tmp = free_tables[index];
+                free_tables[index] = free_tables[left];
+                free_tables[left] = tmp;
+                index = left;
+            } else {
+                uintptr_t tmp = free_tables[index];
+                free_tables[index] = free_tables[right];
+                free_tables[right] = tmp;
+                index = right;
+            }
+        } else {
+            break;
+        }
+    }
+    return remove;
+}
+
+void FreeTable(uintptr_t table) {
+    int i;
+    for (i = 1; i <= free_size) {
+        if (DOWN_TO_PAGE(free_tables[i]) == DOWN_TO_PAGE(table)) {
+            int pfn = (table - PMEM_BASE) >> PAGESHIFT;
+        }
+    }
+    free_tables[++free_size] = table;
+    int index = free_size;
+    int parent = index >> 1;
+    while (index > 1 && free_tables[index] > free_tables[parent]) {
+        uintptr_t tmp = free_tables[index];
+        free_tables[index] = free_tables[parent];
+        free_tables[parent] = tmp;
+        index = parent;
+        parent = index >> 1;
+    }
+    
+}
 
 /* Sets the break address for the kernel */
 extern int SetKernelBrk (void *addr) {
