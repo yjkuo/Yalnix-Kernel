@@ -41,7 +41,7 @@ KERNEL_SRCS = kernel.c interrupt.c syscall.c queue.c list.c
 #	below here.  If you want to, however, you may modify things
 #	such as the definition of CFLAGS, for example.
 #
-
+TEST_DIR = ./tests
 PUBLIC_DIR = /clear/courses/comp421/pub
 # -Wextra -Werror
 CPPFLAGS = -I$(PUBLIC_DIR)/include
@@ -49,7 +49,7 @@ CFLAGS = -g -Wall
 
 LANG = gcc
 
-%: %.o
+%: $(TEST_DIR)/%.o
 	$(LINK.o) -o $@ $^ $(LOADLIBES) $(LDLIBS)
 
 LINK.o = $(PUBLIC_DIR)/bin/link-user-$(LANG) $(LDFLAGS) $(TARGET_ARCH)
