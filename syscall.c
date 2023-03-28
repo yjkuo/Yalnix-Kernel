@@ -50,10 +50,10 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     TracePrintf(10, "process %d: executing Exec()\n", active->pid);
 
     // Loads the specified program
-    LoadProgram(filename, argvec, info);
-
+    int ret = LoadProgram(filename, argvec, info);
+    TracePrintf(10, "%d\n", ret);
     // Returns an error if the previous call returns
-    return ERROR;
+    return 0;
 }
 
 

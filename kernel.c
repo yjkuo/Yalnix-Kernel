@@ -273,12 +273,12 @@ void FreePage (int index, int pfn) {
     // Computes the virtual address of the page
     unsigned int *addr = (unsigned int*)((uintptr_t) VMEM_0_BASE + index * PAGESIZE);
 
+    // Flushes the page from the TLB
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
+
     // Adds the page to the list
     *addr = free_head;
     free_head = pfn;
-
-    // Flushes the page from the TLB
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) addr);
 
     // Increments the number of free pages
     free_npg++;
@@ -659,13 +659,10 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Initializes SP for current process to (void*)cpp
     info->sp = (void*) cpp;
 
-    // Flushes all region 0 entries from the TLB
-    WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
-
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
         if(pt0[i].valid) {
-            pt0[i].kprot = PROT_WRITE;
+            pt0[i].kprot = PROT_READ | PROT_WRITE;
             FreePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }
