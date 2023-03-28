@@ -28,6 +28,7 @@ int KernelFork (int caller_pid) {
     // Remembers the memory usage of the child process
     child_process->used_npg = active->used_npg;
     child_process->brk = active->brk;
+    child_process->sp = active->sp;
 
     // Marks the two processes as parent and child
     insertl(active->running_chd, child_process);

@@ -24,6 +24,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     struct pte *pt;
     int text_npg;
     int heap_npg;
+    int ret_val;
 
     // Stores the original kernel break
     kernelbrk = (uintptr_t) orig_brk;
@@ -189,12 +190,17 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
 
     // Checks if an init program was specified
     if(cmd_args[0])
-        LoadProgram(cmd_args[0], cmd_args, info);
+        ret_val = LoadProgram(cmd_args[0], cmd_args, info);
 
     // Else, loads the default 'init' program
     else {
         char *args_init[] = {"init", NULL};
-        LoadProgram("init", args_init, info);
+        ret_val = LoadProgram("init", args_init, info);
+    }
+
+    if (ret_val == -1) {
+        fprintf(stderr, "LoadProgram: program size too large for memory\n");
+        Halt();
     }
 }
 uintptr_t GetTable() {
@@ -467,6 +473,7 @@ void InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
     pcb->state = state;
     pcb->ptaddr0 = addr;
     pcb->used_npg = 0;
+    pcb->sp = 0;
     pcb->brk = 0;
     pcb->clock_ticks = -1;
     memset(&pcb->input_buf, 0, sizeof(struct buffer));
@@ -682,6 +689,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Makes sure we have enough virtual memory to fit everything within the size of a page table
     if(MEM_INVALID_PAGES + text_npg + data_bss_npg + 1 + stack_npg + 1 + KERNEL_STACK_PAGES > PAGE_TABLE_LEN) {
         TracePrintf(0, "LoadProgram: program '%s' size too large for VIRTUAL memory\n", name);
+        TracePrintf(0, "%d vs %d\n", MEM_INVALID_PAGES + text_npg + data_bss_npg + 1 + stack_npg + 1 + KERNEL_STACK_PAGES, PAGE_TABLE_LEN);
         free(argbuf);
         close(fd);
         return -1;
@@ -710,6 +718,7 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     // Initializes SP for current process to (void*)cpp
     info->sp = (void*) cpp;
+    active->sp = (uintptr_t) cpp;
 
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)

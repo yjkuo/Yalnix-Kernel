@@ -23,6 +23,7 @@ struct pcb {
     enum state_t state;
     uintptr_t ptaddr0;
     int used_npg;
+    uintptr_t sp;
     uintptr_t brk;
     SavedContext ctx;
     int clock_ticks;
