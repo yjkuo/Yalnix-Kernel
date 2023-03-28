@@ -25,7 +25,7 @@
 #	For example, the Makefile will make test1 out of test1.c,
 #	if you have a file named test1.c in this directory.
 #
-ALL = yalnix idle init trapillegal trapmath trapmemory ttyread1 ttywrite1 ttywrite2 ttywrite3 console shell
+ALL = yalnix idle init console shell forktest2b forktest3 forkwait0p forkwait0c forkwait1 forkwait1b forkwait1c forkwait1d
 
 #
 #	You must modify the KERNEL_OBJS and KERNEL_SRCS definitions

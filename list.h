@@ -2,7 +2,8 @@
 #define LIST_H
 
 
-// #include "queue.h"
+#include "kernel.h"
+#include "queue.h"
 
 
 // Declares structures to allow PCB manipulation

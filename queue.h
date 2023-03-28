@@ -2,6 +2,7 @@
 #define QUEUE_H
 
 
+#include "kernel.h"
 
 
 // Declares structures to allow PCB manipulation
@@ -16,7 +17,6 @@ struct queue {
     int size;
 };
 
-#include "kernel.h"
 // Manages the ready processes
 struct queue ready;
 

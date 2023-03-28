@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,7 +24,7 @@ int KernelFork (int caller_pid) {
     // Creates a PCB for the child process
     struct pcb *child_process = (struct pcb*) malloc(sizeof(struct pcb));
     InitProcess(child_process, READY, NewPageTable(active->ptaddr0));
-    child_pcb->used_npg = active->used_npg;
+    child_process->used_npg = active->used_npg;
 
     // Sets the program break for the child process
     child_process->brk = active->brk;
@@ -95,6 +96,7 @@ void KernelExit (int status) {
         // Unblocks the parent process if waiting
         if(active->parent->state == WAITING) {
             active->parent->state = READY;
+            deletel(&blocked, active->parent);
             enq(&ready, active->parent);
         }
     }
