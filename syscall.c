@@ -100,7 +100,7 @@ void KernelExit (int status) {
     }
 
     // Shuts down if no remaining processes except idle
-    if (lempty(blocked) && qempty(&ready)) {
+    if (lempty(blocked) && qempty(ready)) {
         TracePrintf(10, "Exit: No remaining processes, shut down the kernel...\n");
         Halt();
     }
