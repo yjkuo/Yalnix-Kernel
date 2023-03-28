@@ -5,22 +5,30 @@
 // #include "queue.h"
 
 
+// Declares structures to allow PCB manipulation
+struct pcb;
+struct pcb_frame;
+
+
 // Structure of a process list
-typedef struct pcb* list;
-#include "kernel.h"
+struct list {
+    struct pcb_frame *head;
+    int size;
+};
 
 // Manages the blocked processes
-list blocked;
+struct list blocked;
 
 
 // Function prototypes
-void linit (list* );
-void insertl (list* , struct pcb* );
-void deletel (list* , struct pcb* );
-void clockl (list* );
-void exitl (list* );
-struct pcb* readyl (list* );
-int lempty (list );
+void linit (struct list* );
+void insertl (struct list* , struct pcb* );
+void deletel (struct list* , struct pcb* );
+void clockl (struct list* );
+void exitl (struct list* );
+struct pcb* readyl (struct list* );
+int lempty (struct list );
+void ldestroy (struct list* );
 
 
 #endif

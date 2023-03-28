@@ -12,8 +12,8 @@ void ClockHandler (ExceptionInfo* );
 void IllegalHandler (ExceptionInfo* );
 void MemoryHandler (ExceptionInfo* );
 void MathHandler (ExceptionInfo* );
-void TtyTransmitHandler (ExceptionInfo* );
 void TtyReceiveHandler (ExceptionInfo* );
+void TtyTransmitHandler (ExceptionInfo* );
 
 
 #endif
