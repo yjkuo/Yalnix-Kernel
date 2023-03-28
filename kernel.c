@@ -205,7 +205,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
 }
 uintptr_t GetTable() {
 
-    int i;
+    size_t i;
     // 1 for page table at boundary, -1 for page table at middle of page
     for (i = 0; i < free_size; i++) {
         if (abs(free_tables[i]) == 1)
@@ -220,10 +220,8 @@ uintptr_t GetTable() {
         addr = (PMEM_BASE + (i << PAGESHIFT) + ((free_tables[i] == 1) ? 0 : PAGE_TABLE_SIZE));
         free_tables[i] = 0;
     }
-    TracePrintf(0, "Get page table at %p with %d\n", addr, (addr & PAGEOFFSET) ? -1 : 1);
     
     return addr;
-    
 }
 
 void FreeTable(uintptr_t addr) {
@@ -242,6 +240,9 @@ void FreeTable(uintptr_t addr) {
 
         // Frees the borrowed PTE
         ReleasePTE();
+
+        free_tables[pfn] = 0;
+        
     } else {
         free_tables[pfn] = (addr & PAGEOFFSET) ? -1 : 1;
     }
@@ -250,7 +251,7 @@ void FreeTable(uintptr_t addr) {
 
 /* Sets the break address for the kernel */
 extern int SetKernelBrk (void *addr) {
-    TracePrintf(0, "executing SetKernelBrk()\n");
+    TracePrintf(0, "executing SetKernelBrk() with addr %p\n", addr);
 
     int start_index, end_index;
     int i;
@@ -260,7 +261,7 @@ extern int SetKernelBrk (void *addr) {
         TracePrintf(0, "SetKernelBrk: VM enabled\n");
 
         // Confirms that the specified address is higher than the current break
-        if((uintptr_t) addr > kernelbrk) {
+        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT) {
 
             // Finds the range of pages to be allocated
             start_index = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
@@ -279,6 +280,10 @@ extern int SetKernelBrk (void *addr) {
                 pt1[i].kprot = PROT_READ | PROT_WRITE;
                 pt1[i].uprot = PROT_NONE;
             }
+        } else {
+
+            // addr exceeds region 1 vitual memory
+            return -1;
         }
 
         // Flushes all region 1 entries from the TLB
@@ -375,7 +380,6 @@ int NewPageTable (uintptr_t addr) {
     uintptr_t ptaddr0;
 
     // Gets a new page for the page table
-    // pfn = GetPage();
     ptaddr0 = GetTable();
     pfn = (ptaddr0 - PMEM_BASE) >> PAGESHIFT;
 

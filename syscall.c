@@ -16,7 +16,7 @@ int KernelFork (int caller_pid) {
     TracePrintf(10, "process %d: executing Fork()\n", active->pid);
 
     // Checks if there is enough free memory
-    if(active->used_npg > free_npg) {
+    if(active->used_npg + 1> free_npg) {
         TracePrintf(10, "Fork: not enough free pages\n");
         return ERROR;
     }
