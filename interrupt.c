@@ -180,7 +180,7 @@ void IllegalHandler (ExceptionInfo *info) {
     }
 
     // Terminates the process with an error
-    KernelExit(1);
+    KernelExit(ERROR);
 }
 
 
@@ -194,6 +194,7 @@ void MemoryHandler (ExceptionInfo *info) {
     struct pte *pt0;
     int start_index, end_index;
     int i;
+    int need_npg;
 
     // Finds the memory address that caused the exception
     trap_addr = (uintptr_t) info->addr;
@@ -209,7 +210,7 @@ void MemoryHandler (ExceptionInfo *info) {
     //     // Checks if there are enough free pages
     //     if(end_index - start_index > free_npg) {
     //         TracePrintf(5, "process %d: not enough free pages\n", active->pid);
-    //         KernelExit(1);
+    //         KernelExit(ERROR);
     //     }
     
     //     // Accesses the region 0 page table of the current process
@@ -245,18 +246,26 @@ void MemoryHandler (ExceptionInfo *info) {
                 // Finds the range of pages to be allocated
                 start_index = (DOWN_TO_PAGE(trap_addr) - VMEM_0_BASE) >> PAGESHIFT;
                 end_index = (USER_STACK_LIMIT - VMEM_0_BASE) >> PAGESHIFT;
- 
-                // Checks if there are enough free pages
-                if(end_index - start_index > free_npg) {
-                    TracePrintf(5, "process %d: not enough free pages\n", active->pid);
-                    KernelExit(1);
-                }
-            
+
                 // Accesses the region 0 page table of the current process
                 BorrowPTE();
                 pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
                 pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
 
+                // Figure out how many pages we need
+                i = end_index - 1;
+                while (i > start_index && pt0[i].valid) i--;
+                need_npg = i - start_index;
+                TracePrintf(5, "we need %d pages to grow user stack!\n", need_npg);
+
+                // Checks if there are enough free pages
+                if(need_npg > free_npg) {
+                    TracePrintf(5, "process %d: not enough free pages\n", active->pid);
+                    ReleasePTE();
+                    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+                    KernelExit(ERROR);
+                }
+            
                 // Gets these new pages
                 for(i = start_index; i < end_index; i++) {
                     if (pt0[i].valid == 0) {
@@ -273,7 +282,7 @@ void MemoryHandler (ExceptionInfo *info) {
             } else {
                 fprintf(stderr, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
                 TracePrintf(5, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-                KernelExit(1);
+                KernelExit(ERROR);
             }
             
             break;
@@ -292,7 +301,7 @@ void MemoryHandler (ExceptionInfo *info) {
             fprintf(stderr, "process %d: received SIGSEGV from user at address 0x%x\n", active->pid, (unsigned int) trap_addr);
             TracePrintf(5, "process %d: received SIGSEGV from user at address 0x%x\n", active->pid, (unsigned int) trap_addr);
             
-        KernelExit(1);
+        KernelExit(ERROR);
     }
 }
 
@@ -356,7 +365,7 @@ void MathHandler (ExceptionInfo *info) {
     }
 
     // Terminates the process with an error
-    KernelExit(1);
+    KernelExit(ERROR);
 }
 
 

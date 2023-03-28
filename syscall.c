@@ -67,7 +67,7 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     if (ret_val == -2) {
         TracePrintf(10, "Exec: load program failed\n");
         fprintf(stderr, "Exec: load program failed\n");
-        KernelExit(1);
+        KernelExit(ERROR);
     }
     
     return 0;
