@@ -14,18 +14,18 @@
 #
 #	Define the list of everything to be made by this Makefile.
 #	The list should include "yalnix" (the name of your kernel),
-#	plus the list of user test programs you also want to be mae
+#	plus the list of user test programs you also want to be made
 #	by this Makefile.  For example, the definition below
 #	specifies to make Yalnix test user programs test1, test2,
 #	and test3.  You should modify this list to the list of your
 #	own test programs.
 #
 #	For each user test program, the Makefile will make the
-#	program out of a single correspondingly named sourc file.
+#	program out of a single correspondingly named source file.
 #	For example, the Makefile will make test1 out of test1.c,
 #	if you have a file named test1.c in this directory.
 #
-ALL = yalnix idle init console shell bigstack forkwait1c
+ALL = yalnix idle init
 
 #
 #	You must modify the KERNEL_OBJS and KERNEL_SRCS definitions

@@ -15,18 +15,18 @@
 int KernelFork (int caller_pid) {
     TracePrintf(10, "process %d: executing Fork()\n", active->pid);
 
-    // if memory is not enough, return ERROR
-    if (active->used_npg > free_npg) {
-        TracePrintf(10, "Fork: not enough free memory\n");
+    // Checks if there is enough free memory
+    if(active->used_npg > free_npg) {
+        TracePrintf(10, "Fork: not enough free pages\n");
         return ERROR;
     }
-    
+
     // Creates a PCB for the child process
     struct pcb *child_process = (struct pcb*) malloc(sizeof(struct pcb));
     InitProcess(child_process, READY, NewPageTable(active->ptaddr0));
-    child_process->used_npg = active->used_npg;
 
-    // Sets the program break for the child process
+    // Remembers the memory usage of the child process
+    child_process->used_npg = active->used_npg;
     child_process->brk = active->brk;
 
     // Marks the two processes as parent and child
@@ -42,12 +42,18 @@ int KernelFork (int caller_pid) {
 
     // Case 1 : parent process
     if(active->pid == caller_pid)
+
+        // Returns the PID of the child to the parent
         return child_process->pid;
 
     // Case 2 : child process
     else {
+
+        // Switches to the region 0 page table of the child process
         WriteRegister(REG_PTR0, (RCS421RegVal) child_process->ptaddr0);
         WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
+
+        // Returns 0 to the child
         return 0;
     }
 }
@@ -57,19 +63,29 @@ int KernelFork (int caller_pid) {
 int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     TracePrintf(10, "process %d: executing Exec()\n", active->pid);
 
+    int ret_val;
+
     // Loads the specified program
-    int ret_val = LoadProgram(filename, argvec, info);
+    ret_val = LoadProgram(filename, argvec, info);
 
-    // Returns an error if the previous call returns error
-    if (ret_val == -1)
+    // Case 1 : current process is still runnable
+    if(ret_val == -1) {
+        TracePrintf(10, "Exec: load program failed, current process intact\n");
+        fprintf(stderr, "Exec: load program failed, current process intact\n");
+    
+        // Returns an error
         return ERROR;
+    }
 
-    if (ret_val == -2) {
-        TracePrintf(10, "Exec: load program failed\n");
-        fprintf(stderr, "Exec: load program failed\n");
+    // Case 2 : current process is no longer runnable
+    if(ret_val == -2) {
+        TracePrintf(10, "Exec: load program failed, current process lost\n");
+        fprintf(stderr, "Exec: load program failed, current process lost\n");
+
+        // Terminates the current process
         KernelExit(ERROR);
     }
-    
+
     return 0;
 }
 
@@ -79,6 +95,7 @@ void KernelExit (int status) {
     TracePrintf(10, "process %d: executing Exit()\n", active->pid);
 
     struct pcb *new_process;
+    int remaining = 0, i;
 
     // Stores the exit status in the PCB
     active->exit_status = status;
@@ -101,9 +118,27 @@ void KernelExit (int status) {
         }
     }
 
-    // Shuts down if no remaining processes except idle
-    if (lempty(blocked) && qempty(ready)) {
-        TracePrintf(10, "Exit: No remaining processes, shut down the kernel...\n");
+    // Checks if there are still processes in the ready queue
+    if(!qempty(ready))
+        remaining = 1;
+
+    // Checks if there are still processes in the blocked list
+    if(!lempty(blocked))
+        remaining = 1;
+
+    // Checks if there are still processes in any of the reading queues
+    for(i = 0; i < NUM_TERMINALS; i++)
+        if(!qempty(*term[i].read_procs))
+            remaining = 1;
+
+    // Checks if there are still processes in any of the writing queues
+    for(i = 0; i < NUM_TERMINALS; i++)
+        if(!qempty(*term[i].write_procs))
+            remaining = 1;
+
+    // Shuts down the kernel if there are no remaining processes except idle
+    if(remaining == 0) {
+        TracePrintf(10, "Exit: no remaining processes; shutting down the kernel ...\n");
         Halt();
     }
 
@@ -122,7 +157,7 @@ int KernelWait (int *status_ptr) {
 
     // Checks the validity of the arguments
     if(!status_ptr) {
-        TracePrintf(10, "Wait: invalid status pointer 0x%x\n", (uintptr_t) status_ptr);
+        TracePrintf(10, "Wait: invalid status pointer %p\n", (uintptr_t) status_ptr);
         return ERROR;
     }
 
@@ -171,13 +206,14 @@ int KernelBrk (void *addr, void *sp) {
 
     // Checks if the specified break address is valid
     if(!addr || (uintptr_t) addr < 0 || (uintptr_t) addr >= DOWN_TO_PAGE(sp) - PAGESIZE) {
-        TracePrintf(10, "Brk: invalid address 0x%x\n", (uintptr_t) addr);
+        TracePrintf(10, "Brk: invalid address %p\n", (uintptr_t) addr);
         return ERROR;
     }
 
     // Gets the current program break
     curbrk = active->brk;
-    TracePrintf(0, "Current process brk at %p\n", curbrk);
+    TracePrintf(10, "Brk: current process break at %p\n", curbrk);
+
     // Accesses the region 0 page table of the process
     BorrowPTE();
     pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
@@ -204,6 +240,8 @@ int KernelBrk (void *addr, void *sp) {
             pt0[i].kprot = PROT_READ | PROT_WRITE;
             pt0[i].uprot = PROT_READ | PROT_WRITE;
         }
+
+        // Updates the memory usage of the current process
         active->used_npg += end_index - start_index;
     }
 
@@ -221,6 +259,8 @@ int KernelBrk (void *addr, void *sp) {
             FreePage(i, pt0[i].pfn);
             pt0[i].valid = 0;
         }
+
+        // Updates the memory usage of the current process
         active->used_npg -= end_index - start_index;
     }
 
@@ -274,7 +314,7 @@ int KernelTtyRead (int tty_id, void *buf, int len) {
         return ERROR;
     }
     if(!buf) {
-        TracePrintf(10, "TtyRead: invalid buffer address 0x%x\n", (uintptr_t) buf);
+        TracePrintf(10, "TtyRead: invalid buffer address %p\n", (uintptr_t) buf);
         return ERROR;
     }
     if(len < 0 || len > TERMINAL_MAX_LINE) {
@@ -331,7 +371,7 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
         return ERROR;
     }
     if(!buf) {
-        TracePrintf(10, "TtyWrite: invalid buffer address 0x%x\n", (uintptr_t) buf);
+        TracePrintf(10, "TtyWrite: invalid buffer address %p\n", (uintptr_t) buf);
         return ERROR;
     }
     if(len < 0 || len > TERMINAL_MAX_LINE) {
