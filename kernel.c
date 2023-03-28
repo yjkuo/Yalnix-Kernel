@@ -47,7 +47,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     free_head = INT_MAX;
 
     // Adds pages below the kernel stack to the list of free pages (skipping the first MEM_INVALID_PAGES + 1 pages)
-    addr = PMEM_BASE + MEM_INVALID_SIZE + PAGESIZE;
+    addr = PMEM_BASE + MEM_INVALID_SIZE;
     for(; addr < KERNEL_STACK_BASE; addr += PAGESIZE) {
         *(unsigned int*) addr = free_head;
         free_head = (addr - PMEM_BASE) >> PAGESHIFT;
@@ -62,8 +62,6 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         free_npg++;
     }
 
-    // free_tables = malloc((pmem_size >> (PAGESHIFT - 1)) * sizeof(uintptr_t));
-    // memset(free_tables, 0, sizeof(free_tables));
 
     // Allocates memory for an initial region 0 page table
     ptaddr0 = PMEM_BASE + MEM_INVALID_SIZE + (PAGESIZE >> 1);
@@ -163,6 +161,10 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         term[i].term_state = FREE;       
     }
 
+    // Book keeping for free page tables
+    free_tables = calloc((pmem_size >> PAGESHIFT), sizeof(int));
+    free_size = (pmem_size >> PAGESHIFT);
+
     // Creates the idle process
     InitProcess(&idle_pcb, READY, ptaddr0);
     active = &idle_pcb;
@@ -195,59 +197,50 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         LoadProgram("init", args_init, info);
     }
 }
-// uintptr_t GetTable() {
-//     if (free_size == 0) {
-//         int pfn = GetPage();
-//         free_tables[++free_size] = (PMEM_BASE + (pfn << PAGESHIFT) + PAGE_TABLE_SIZE);
-//         return (PMEM_BASE + (pfn << PAGESHIFT));
-//     }
+uintptr_t GetTable() {
 
-//     uintptr_t remove = free_tables[1];
-//     free_tables[1] = free_tables[size];
-//     free_size--;
-//     int index = 1;
-
-//     while (index <= (free_size >> 1)) {
-//         int left = index << 1;
-//         int right = (index << 1) + 1;
-//         if (free_tables[index] < free_tables[left] || free_tables[index] < free_tables[right]) {
-//             if (free_tables[index] < free_tables[left]) {
-//                 uintptr_t tmp = free_tables[index];
-//                 free_tables[index] = free_tables[left];
-//                 free_tables[left] = tmp;
-//                 index = left;
-//             } else {
-//                 uintptr_t tmp = free_tables[index];
-//                 free_tables[index] = free_tables[right];
-//                 free_tables[right] = tmp;
-//                 index = right;
-//             }
-//         } else {
-//             break;
-//         }
-//     }
-//     return remove;
-// }
-
-// void FreeTable(uintptr_t table) {
-//     int i;
-//     for (i = 1; i <= free_size) {
-//         if (DOWN_TO_PAGE(free_tables[i]) == DOWN_TO_PAGE(table)) {
-//             int pfn = (table - PMEM_BASE) >> PAGESHIFT;
-//         }
-//     }
-//     free_tables[++free_size] = table;
-//     int index = free_size;
-//     int parent = index >> 1;
-//     while (index > 1 && free_tables[index] > free_tables[parent]) {
-//         uintptr_t tmp = free_tables[index];
-//         free_tables[index] = free_tables[parent];
-//         free_tables[parent] = tmp;
-//         index = parent;
-//         parent = index >> 1;
-//     }
+    int i;
+    // 1 for page table at boundary, -1 for page table at middle of page
+    for (i = 0; i < free_size; i++) {
+        if (abs(free_tables[i]) == 1)
+            break;
+    }
+    uintptr_t addr;
+    if (i == free_size) {
+        int pfn = GetPage();
+        free_tables[pfn] = 1;
+        addr = (PMEM_BASE + (pfn << PAGESHIFT) + PAGE_TABLE_SIZE);
+    } else {
+        addr = (PMEM_BASE + (i << PAGESHIFT) + ((free_tables[i] == 1) ? 0 : PAGE_TABLE_SIZE));
+        free_tables[i] = 0;
+    }
+    TracePrintf(0, "Get page table at %p with %d\n", addr, (addr & PAGEOFFSET) ? -1 : 1);
     
-// }
+    return addr;
+    
+}
+
+void FreeTable(uintptr_t addr) {
+    struct pte *pt0;
+    int pfn = (addr - PMEM_BASE) >> PAGESHIFT;
+    TracePrintf(0, "Free page table at %p pfn %d\n", addr, pfn);
+
+    if (abs(free_tables[pfn]) == 1) {
+        BorrowPTE();
+        pt1[borrowed_index].pfn = pfn;
+        pt0 = (struct pte*) (borrowed_addr + ((addr - PMEM_BASE) & PAGEOFFSET));
+
+        // Free the page table itself
+        FreePage(PAGE_TABLE_LEN + borrowed_index, pfn);
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+        // Frees the borrowed PTE
+        ReleasePTE();
+    } else {
+        free_tables[pfn] = (addr & PAGEOFFSET) ? -1 : 1;
+    }
+    
+}
 
 /* Sets the break address for the kernel */
 extern int SetKernelBrk (void *addr) {
@@ -373,9 +366,12 @@ int NewPageTable (uintptr_t addr) {
     int i;
     struct pte *old_addr, *new_addr;
     void *virtual_addr;
+    uintptr_t ptaddr0;
 
     // Gets a new page for the page table
-    pfn = GetPage();
+    // pfn = GetPage();
+    ptaddr0 = GetTable();
+    pfn = (ptaddr0 - PMEM_BASE) >> PAGESHIFT;
 
     // Accesses the region 0 page table of the old process
     BorrowPTE();
@@ -385,7 +381,7 @@ int NewPageTable (uintptr_t addr) {
     // Accesses the region 0 page table of the new process
     BorrowPTE();
     pt1[borrowed_index].pfn = pfn;
-    new_addr = (struct pte*) borrowed_addr;
+    new_addr = (struct pte*) (borrowed_addr + ((ptaddr0 - PMEM_BASE) & PAGEOFFSET));
 
     // Copies the page table over
     memcpy(new_addr, old_addr, PAGE_TABLE_SIZE);
@@ -422,7 +418,7 @@ int NewPageTable (uintptr_t addr) {
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) old_addr);
 
     // Returns the physical address of the new table
-    return (PMEM_BASE + (pfn << PAGESHIFT));
+    return ptaddr0;
 }
 
 
@@ -539,7 +535,8 @@ void RemoveProcess (struct pcb *pcb) {
     }
 
     // Free the page table itself
-    FreePage(PAGE_TABLE_LEN + borrowed_index, pt1[borrowed_index].pfn);
+    // FreePage(PAGE_TABLE_LEN + borrowed_index, pt1[borrowed_index].pfn);
+    FreeTable(pcb->ptaddr0);
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
 
     // Frees the borrowed PTE

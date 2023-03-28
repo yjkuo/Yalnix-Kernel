@@ -49,7 +49,7 @@ unsigned int free_head;
 unsigned int free_npg;
 
 // Manages a heap of free page tables
-uintptr_t *free_tables;
+int *free_tables;
 unsigned int free_size;
 
 // Flag to indicate if virtual memory is enabled
