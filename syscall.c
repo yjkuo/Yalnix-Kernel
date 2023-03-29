@@ -11,6 +11,101 @@
 #include "io.h"
 
 
+/* Checks read access for string arguments */
+int CheckString (char *str) {
+
+    struct pte *pt0, entry;
+    uintptr_t addr;
+    int index;
+
+    // Returns ERROR if the address lies in the region 0 address space
+    if((uintptr_t) str < 0 || (uintptr_t) str >= VMEM_0_LIMIT)
+        return ERROR;
+
+    // Accesses the region 0 page table of the process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
+
+    // Checks the string byte-by-byte
+    while(1) {
+
+        // Finds the corresponding page table entry
+        addr = DOWN_TO_PAGE(str);
+        index = (addr - VMEM_0_BASE) >> PAGESHIFT;
+        entry = pt0[index];
+
+        // Checks that the page is valid and has read access
+        if(entry.valid == 0 || (entry.uprot & PROT_READ) != PROT_READ) {
+
+            // Frees the borrowed PTE
+            ReleasePTE();
+            WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+            // Returns ERROR
+            return ERROR;
+        }
+
+        // Stops if a null byte is encountered
+        str++;
+        if(*str == '\0')
+            break;
+    }
+
+    // Frees the borrowed PTE
+    ReleasePTE();
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+    // Confirms that the argument is valid
+    return 0;
+}
+
+
+/* Checks read/write access for buffers */
+int CheckBuffer (char *buf, int len, int prot) {
+
+    struct pte *pt0, entry;
+    uintptr_t addr;
+    int i, index;
+
+    // Returns ERROR if the address lies in the region 0 address space
+    if((uintptr_t) buf < 0 || (uintptr_t) buf >= VMEM_0_LIMIT)
+        return ERROR;
+
+    // Accesses the region 0 page table of the process
+    BorrowPTE();
+    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
+
+    // Checks the buffer byte-by-byte
+    for(i = 0; i < len; i++) {
+
+        // Finds the corresponding page table entry
+        addr = DOWN_TO_PAGE(buf + i);
+        index = (addr - VMEM_0_BASE) >> PAGESHIFT;
+        entry = pt0[index];
+
+        // Checks that the page is valid and has appropriate access
+        if(entry.valid == 0 || (entry.uprot & prot) == 0) {
+
+            // Frees the borrowed PTE
+            ReleasePTE();
+            WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+            // Returns ERROR
+            return ERROR;
+        }
+    }
+
+    // Frees the borrowed PTE
+    ReleasePTE();
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+    // Confirms that the argument is valid
+    return 0;
+}
+
+
 /* Creates a new process */
 int KernelFork (int caller_pid) {
     TracePrintf(10, "process %d: executing Fork()\n", active->pid);
@@ -64,7 +159,18 @@ int KernelFork (int caller_pid) {
 int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     TracePrintf(10, "process %d: executing Exec()\n", active->pid);
 
-    int ret_val;
+    int i, ret_val;
+
+    // Validates the arguments
+    if(!filename || CheckString(filename)){
+        TracePrintf(10, "Exec: invalid filename pointer %p\n", (uintptr_t) filename);
+        return ERROR;
+    }
+    for(i = 0; argvec[i]; i++)
+        if(CheckString(argvec[i])) {
+            TracePrintf(10, "Exec: invalid argument pointer %p\n", (uintptr_t) argvec[i]);
+            return ERROR;
+        }
 
     // Loads the specified program
     ret_val = LoadProgram(filename, argvec, info);
@@ -156,8 +262,8 @@ int KernelWait (int *status_ptr) {
     struct pcb *new_process, *child;
     int pid;
 
-    // Checks the validity of the arguments
-    if(!status_ptr) {
+    // Validates the argument
+    if(!status_ptr || CheckBuffer((char*) status_ptr, sizeof(int), PROT_READ | PROT_WRITE)) {
         TracePrintf(10, "Wait: invalid status pointer %p\n", (uintptr_t) status_ptr);
         return ERROR;
     }
@@ -205,7 +311,7 @@ int KernelBrk (void *addr, void *sp) {
     int start_index, end_index;
     int i;
 
-    // Checks if the specified break address is valid
+    // Validates the argument
     if(!addr || (uintptr_t) addr < 0 || (uintptr_t) addr >= DOWN_TO_PAGE(sp) - PAGESIZE) {
         TracePrintf(10, "Brk: invalid address %p\n", (uintptr_t) addr);
         return ERROR;
@@ -281,7 +387,7 @@ int KernelDelay (int clock_ticks) {
 
     struct pcb *new_process;
 
-    // Checks for an invalid number of clock ticks
+    // Validates the argument
     if(clock_ticks < 0)
         return ERROR;
 
@@ -309,17 +415,17 @@ int KernelTtyRead (int tty_id, void *buf, int len) {
     int num_chars;
     char temp_buffer[TERMINAL_MAX_LINE];
 
-    // Checks the validity of the arguments
+    // Validates the arguments
     if(tty_id < 0 || tty_id >= NUM_TERMINALS) {
         TracePrintf(10, "TtyRead: invalid terminal id %d\n", tty_id);
         return ERROR;
     }
-    if(!buf) {
-        TracePrintf(10, "TtyRead: invalid buffer address %p\n", (uintptr_t) buf);
-        return ERROR;
-    }
     if(len < 0 || len > TERMINAL_MAX_LINE) {
         TracePrintf(10, "TtyRead: invalid buffer length %d\n", len);
+        return ERROR;
+    }
+    if(!buf || CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
+        TracePrintf(10, "TtyRead: invalid buffer address %p\n", (uintptr_t) buf);
         return ERROR;
     }
 
@@ -366,17 +472,17 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
 
     struct pcb *new_process;
 
-    // Checks the validity of the arguments
+    // Validates the arguments
     if(tty_id < 0 || tty_id >= NUM_TERMINALS) {
         TracePrintf(10, "TtyWrite: invalid terminal id %d\n", tty_id);
         return ERROR;
     }
-    if(!buf) {
-        TracePrintf(10, "TtyWrite: invalid buffer address %p\n", (uintptr_t) buf);
-        return ERROR;
-    }
     if(len < 0 || len > TERMINAL_MAX_LINE) {
         TracePrintf(10, "TtyWrite: invalid buffer length %d\n", len);
+        return ERROR;
+    }
+    if(!buf || CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
+        TracePrintf(10, "TtyWrite: invalid buffer address %p\n", (uintptr_t) buf);
         return ERROR;
     }
 
