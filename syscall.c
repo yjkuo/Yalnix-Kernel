@@ -8,102 +8,8 @@
 #include "kernel.h"
 #include "queue.h"
 #include "list.h"
+#include "args.h"
 #include "io.h"
-
-
-/* Checks read access for string arguments */
-int CheckString (char *str) {
-
-    struct pte *pt0, entry;
-    uintptr_t addr;
-    int index;
-
-    // Returns ERROR if the address lies in the region 0 address space
-    if((uintptr_t) str < 0 || (uintptr_t) str >= VMEM_0_LIMIT)
-        return ERROR;
-
-    // Accesses the region 0 page table of the process
-    BorrowPTE();
-    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
-    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
-
-    // Checks the string byte-by-byte
-    while(1) {
-
-        // Finds the corresponding page table entry
-        addr = DOWN_TO_PAGE(str);
-        index = (addr - VMEM_0_BASE) >> PAGESHIFT;
-        entry = pt0[index];
-
-        // Checks that the page is valid and has read access
-        if(entry.valid == 0 || (entry.uprot & PROT_READ) != PROT_READ) {
-
-            // Frees the borrowed PTE
-            ReleasePTE();
-            WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
-
-            // Returns ERROR
-            return ERROR;
-        }
-
-        // Stops if a null byte is encountered
-        str++;
-        if(*str == '\0')
-            break;
-    }
-
-    // Frees the borrowed PTE
-    ReleasePTE();
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
-
-    // Confirms that the argument is valid
-    return 0;
-}
-
-
-/* Checks read/write access for buffers */
-int CheckBuffer (char *buf, int len, int prot) {
-
-    struct pte *pt0, entry;
-    uintptr_t addr;
-    int i, index;
-
-    // Returns ERROR if the address lies in the region 0 address space
-    if((uintptr_t) buf < 0 || (uintptr_t) buf >= VMEM_0_LIMIT)
-        return ERROR;
-
-    // Accesses the region 0 page table of the process
-    BorrowPTE();
-    pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
-    pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
-
-    // Checks the buffer byte-by-byte
-    for(i = 0; i < len; i++) {
-
-        // Finds the corresponding page table entry
-        addr = DOWN_TO_PAGE(buf + i);
-        index = (addr - VMEM_0_BASE) >> PAGESHIFT;
-        entry = pt0[index];
-
-        // Checks that the page is valid and has appropriate access
-        if(entry.valid == 0 || (entry.uprot & prot) == 0) {
-
-            // Frees the borrowed PTE
-            ReleasePTE();
-            WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
-
-            // Returns ERROR
-            return ERROR;
-        }
-    }
-
-    // Frees the borrowed PTE
-    ReleasePTE();
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
-
-    // Confirms that the argument is valid
-    return 0;
-}
 
 
 /* Creates a new process */
@@ -169,17 +75,17 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     int i, retval;
 
     // Validates the arguments
-    if(!filename || CheckString(filename)){
-        TracePrintf(10, "Exec: invalid filename pointer %p\n", (uintptr_t) filename);
+    if(CheckString(filename)) {
+        TracePrintf(10, "Exec: invalid filename pointer %p\n", filename);
         return ERROR;
     }
-    if (!argvec) {
-        TracePrintf(10, "Exec: invalid argument pointer %p\n", (uintptr_t) argvec);
+    if(CheckBuffer((char*) argvec, sizeof(char*), PROT_READ)) {
+        TracePrintf(10, "Exec: invalid argument vector %p\n", argvec);
         return ERROR;
     }
     for(i = 0; argvec[i]; i++)
         if(CheckString(argvec[i])) {
-            TracePrintf(10, "Exec: invalid argument pointer %p\n", (uintptr_t) argvec[i]);
+            TracePrintf(10, "Exec: invalid argument pointer %p\n", argvec[i]);
             return ERROR;
         }
 
@@ -274,8 +180,8 @@ int KernelWait (int *status_ptr) {
     int pid;
 
     // Validates the argument
-    if(!status_ptr || CheckBuffer((char*) status_ptr, sizeof(int), PROT_READ | PROT_WRITE)) {
-        TracePrintf(10, "Wait: invalid status pointer %p\n", (uintptr_t) status_ptr);
+    if(CheckBuffer((char*) status_ptr, sizeof(int), PROT_READ | PROT_WRITE)) {
+        TracePrintf(10, "Wait: invalid status pointer %p\n", status_ptr);
         return ERROR;
     }
 
@@ -323,8 +229,8 @@ int KernelBrk (void *addr) {
     int i;
 
     // Validates the argument
-    if((uintptr_t) addr < 0 || (uintptr_t) addr >= active->user_stack_base - PAGESIZE) {
-        TracePrintf(10, "Brk: invalid address %p\n", addr);
+    if((uintptr_t) addr < VMEM_0_BASE || (uintptr_t) addr >= active->user_stack_base - PAGESIZE) {
+        TracePrintf(10, "Brk: invalid break address %p\n", addr);
         return ERROR;
     }
 
@@ -399,8 +305,10 @@ int KernelDelay (int clock_ticks) {
     struct pcb *new_process;
 
     // Validates the argument
-    if(clock_ticks < 0)
+    if(clock_ticks < 0) {
+        TracePrintf(10, "Delay: invalid clock ticks %d\n", clock_ticks);
         return ERROR;
+    }
 
     // Checks for zero clock ticks
     if(clock_ticks == 0)
@@ -435,8 +343,8 @@ int KernelTtyRead (int tty_id, void *buf, int len) {
         TracePrintf(10, "TtyRead: invalid buffer length %d\n", len);
         return ERROR;
     }
-    if(!buf || CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
-        TracePrintf(10, "TtyRead: invalid buffer address %p\n", (uintptr_t) buf);
+    if(CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
+        TracePrintf(10, "TtyRead: invalid buffer address %p\n", buf);
         return ERROR;
     }
 
@@ -495,8 +403,8 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
         TracePrintf(10, "TtyWrite: invalid buffer length %d\n", len);
         return ERROR;
     }
-    if(!buf || CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
-        TracePrintf(10, "TtyWrite: invalid buffer address %p\n", (uintptr_t) buf);
+    if(CheckBuffer(buf, len, PROT_READ | PROT_WRITE)) {
+        TracePrintf(10, "TtyWrite: invalid buffer address %p\n", buf);
         return ERROR;
     }
 
