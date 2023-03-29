@@ -44,7 +44,7 @@ void KernelHandler (ExceptionInfo *info) {
 
         // Handles Brk()
         case YALNIX_BRK :
-            info->regs[0] = KernelBrk((void*) info->regs[1], info->sp);
+            info->regs[0] = KernelBrk((void*) info->regs[1]);
             break;
 
         // Handles Delay()

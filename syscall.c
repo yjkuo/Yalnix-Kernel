@@ -314,7 +314,7 @@ int KernelGetPid () {
 
 
 /* Sets the break for the currently active process */
-int KernelBrk (void *addr, void *sp) {
+int KernelBrk (void *addr) {
     TracePrintf(10, "process %d: executing Brk()\n", active->pid);
 
     uintptr_t curbrk;
@@ -323,8 +323,8 @@ int KernelBrk (void *addr, void *sp) {
     int i;
 
     // Validates the argument
-    if(!addr || (uintptr_t) addr < 0 || (uintptr_t) addr >= DOWN_TO_PAGE(sp) - PAGESIZE) {
-        TracePrintf(10, "Brk: invalid address %p\n", (uintptr_t) addr);
+    if((uintptr_t) addr < 0 || (uintptr_t) addr >= active->user_stack_base - PAGESIZE) {
+        TracePrintf(10, "Brk: invalid address %p\n", addr);
         return ERROR;
     }
 
@@ -386,7 +386,7 @@ int KernelBrk (void *addr, void *sp) {
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Updates the break for the current process
-    active->brk = (uintptr_t)(UP_TO_PAGE(addr));
+    active->brk = (uintptr_t) addr;
 
     return 0;
 }

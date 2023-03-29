@@ -11,7 +11,7 @@ int KernelExec (char* , char** , ExceptionInfo* );
 void KernelExit (int );
 int KernelWait (int* );
 int KernelGetPid ();
-int KernelBrk (void* , void* );
+int KernelBrk (void* );
 int KernelDelay (int );
 int KernelTtyRead (int , void* , int );
 int KernelTtyWrite (int , void* , int );
