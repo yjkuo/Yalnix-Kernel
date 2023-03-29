@@ -71,6 +71,10 @@ int first_return;
 void *borrowed_addr;
 int borrowed_index;
 
+// Temporarily buffers borrowed PTEs if required
+struct pte pte_buffer[4];
+int pte_count;
+
 // Keeps track of the last assigned PID
 unsigned int lastpid;
 

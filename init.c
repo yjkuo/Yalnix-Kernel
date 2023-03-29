@@ -13,7 +13,7 @@ int main() {
     unsigned int pid;
     void *curr_break;
     int i, len;
-	char buffer[8];
+    char buffer[8];
 
     // Tests the GetPid() system call
     pid = GetPid();
@@ -34,16 +34,16 @@ int main() {
         Delay(5);
     }
 
-	// Tests the TtyRead() system call
-	len = TtyRead(0, buffer, 8);
-	if(len == 7 && strncmp(buffer, "yalnix", 6) == 0)
+    // Tests the TtyRead() system call
+    len = TtyRead(0, buffer, 8);
+    if(len == 7 && strncmp(buffer, "yalnix", 6) == 0)
         TracePrintf(25, "init: read 'yalnix' from console\n");
 
-	// Tests the TtyWrite() system call
-	len = TtyWrite(0, "yalnix", 6);
-	if(len == 6)
+    // Tests the TtyWrite() system call
+    len = TtyWrite(0, "yalnix", 6);
+    if(len == 6)
         TracePrintf(25, "init: wrote 'yalnix' to console\n");
 
     // Tests the Exit() system call
-	Exit(0);
+    Exit(0);
 }

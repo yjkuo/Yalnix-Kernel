@@ -63,7 +63,6 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
         free_npg++;
     }
 
-
     // Allocates memory for an initial region 0 page table
     ptaddr0 = PMEM_BASE + MEM_INVALID_SIZE + (PAGESIZE >> 1);
     pt = (struct pte*) ptaddr0;
@@ -261,14 +260,14 @@ extern int SetKernelBrk (void *addr) {
         TracePrintf(0, "SetKernelBrk: VM enabled\n");
 
         // Confirms that the specified address is higher than the current break
-        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT) {
+        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT - PAGESIZE) {
 
             // Finds the range of pages to be allocated
             start_index = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
             end_index = (UP_TO_PAGE(addr) - VMEM_1_BASE) >> PAGESHIFT;
 
             // Checks if there are enough free pages
-            if(end_index - start_index + 5 > free_npg) {
+            if(end_index - start_index > free_npg) {
                 TracePrintf(0, "SetKernelBrk: not enough free pages\n");
                 return -1;
             }
@@ -352,6 +351,12 @@ void BorrowPTE () {
     borrowed_addr = (void*)((uintptr_t) borrowed_addr - PAGESIZE);
     borrowed_index--;
 
+    // Temporarily buffers the current PTE if in use
+    if(pt1[borrowed_index].valid) {
+        pte_buffer[pte_count] = pt1[borrowed_index];
+        pte_count++;
+    }
+
     // Initializes the PTE
     pt1[borrowed_index].valid = 1;
     pt1[borrowed_index].kprot = PROT_READ | PROT_WRITE;
@@ -364,6 +369,12 @@ void ReleasePTE () {
     // Frees the PTE
     pt1[borrowed_index].valid = 0;
     WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
+
+    // Restores a buffered PTE
+    if(pte_count) {
+        pte_count--;
+        pt1[borrowed_index] = pte_buffer[pte_count];
+    }
 
     // Updates the borrowed address and index
     borrowed_addr = (void*)((uintptr_t) borrowed_addr + PAGESIZE);
