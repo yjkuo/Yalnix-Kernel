@@ -186,10 +186,8 @@ void IllegalHandler (ExceptionInfo *info) {
 
 /* Handles a memory trap */
 void MemoryHandler (ExceptionInfo *info) {
-    TracePrintf(5, "memory trap %d\n", info->code);
-    TracePrintf(5, "sp:%p\n", info->sp);
-    TracePrintf(5, "pc:%p\n", info->pc);
-    TracePrintf(5, "addr:%p\n", info->addr);
+    TracePrintf(5, "memory trap\n");
+
     uintptr_t trap_addr;
     struct pte *pt0;
     int start_index, end_index;
@@ -198,69 +196,68 @@ void MemoryHandler (ExceptionInfo *info) {
     // Finds the memory address that caused the exception
     trap_addr = (uintptr_t) info->addr;
 
-    switch(info->code) {
+    // Checks if the process is attempting to grow its user stack
+    if(trap_addr >= UP_TO_PAGE(active->brk) + PAGESIZE && trap_addr < active->user_stack_base) {
+        TracePrintf(5, "process %d: growing user stack\n", active->pid);
 
-        case TRAP_MEMORY_MAPERR :
+        // Finds the range of pages to be allocated
+        start_index = (DOWN_TO_PAGE(trap_addr) - VMEM_0_BASE) >> PAGESHIFT;
+        end_index = (active->user_stack_base - VMEM_0_BASE) >> PAGESHIFT;
 
-            if (trap_addr >= UP_TO_PAGE(active->brk) + PAGESIZE && DOWN_TO_PAGE(trap_addr) < DOWN_TO_PAGE(active->sp)) {
-                TracePrintf(5, "process %d: growing user stack\n", active->pid);
-                
-                // Finds the range of pages to be allocated
-                start_index = (DOWN_TO_PAGE(trap_addr) - VMEM_0_BASE) >> PAGESHIFT;
-                end_index = (DOWN_TO_PAGE(active->sp) - VMEM_0_BASE) >> PAGESHIFT;
-
-                TracePrintf(5, "we need %d pages to grow user stack!\n", end_index - start_index);
-
-                // Checks if there are enough free pages
-                if(end_index - start_index > free_npg) {
-                    fprintf(stderr, "process %d: not enough free pages\n", active->pid);
-                    TracePrintf(5, "process %d: not enough free pages\n", active->pid);
-                    KernelExit(ERROR);
-                }
-
-                // Accesses the region 0 page table of the process
-                BorrowPTE();
-                pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
-                pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
-                
-                // Gets these new pages
-                for(i = start_index; i < end_index; i++) {
-                    if (pt0[i].valid == 0) {
-                        pt0[i].valid = 1;
-                        pt0[i].pfn = GetPage();
-                        pt0[i].kprot = PROT_READ | PROT_WRITE;
-                        pt0[i].uprot = PROT_READ | PROT_WRITE;
-                    }
-                }
-
-                // Returns the borrowed PTE and flushes the entry for the region 0 page table
-                ReleasePTE();
-                WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
-            } else {
-                fprintf(stderr, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-                TracePrintf(5, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-                KernelExit(ERROR);
-            }
-            active->sp = (uintptr_t) info->sp;
-            break;
-
-        case TRAP_MEMORY_ACCERR :
-            fprintf(stderr, "process %d: protection violation at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-            TracePrintf(5, "process %d: protection violation at address 0x%x\n", active->pid, (unsigned int) trap_addr);
+        // Checks if there are enough free pages
+        if(end_index - start_index > free_npg) {
+            TracePrintf(5, "process %d: not enough free pages\n", active->pid);
             KernelExit(ERROR);
-            break;
+        }
+    
+        // Accesses the region 0 page table of the current process
+        BorrowPTE();
+        pt1[borrowed_index].pfn = (active->ptaddr0 - PMEM_BASE) >> PAGESHIFT;
+        pt0 = (struct pte*) (borrowed_addr + ((active->ptaddr0 - PMEM_BASE) & PAGEOFFSET));
 
-        case TRAP_MEMORY_KERNEL :
-            fprintf(stderr, "process %d: Linux kernel sent SIGSEGV at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-            TracePrintf(5, "process %d: Linux kernel sent SIGSEGV at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-            KernelExit(ERROR);
-            break;
+        // Gets these new pages
+        for(i = start_index; i < end_index; i++) {
+            pt0[i].valid = 1;
+            pt0[i].pfn = GetPage();
+            pt0[i].kprot = PROT_READ | PROT_WRITE;
+            pt0[i].uprot = PROT_READ | PROT_WRITE;
+        }
 
-        case TRAP_MEMORY_USER :
-            fprintf(stderr, "process %d: received SIGSEGV from user at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-            TracePrintf(5, "process %d: received SIGSEGV from user at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-            KernelExit(ERROR);
-            break;
+        // Returns the borrowed PTE and flushes the entry for the region 0 page table
+        ReleasePTE();
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+        // Updates the user stack base
+        active->user_stack_base = DOWN_TO_PAGE(trap_addr);
+    }
+
+    // Else, prints an appropriate error message
+    else {
+        switch(info->code) {
+
+            case TRAP_MEMORY_MAPERR :
+                fprintf(stderr, "process %d: no mapping at address %p\n", active->pid, info->addr);
+                TracePrintf(5, "process %d: no mapping at address %p\n", active->pid, info->addr);
+                break;
+
+            case TRAP_MEMORY_ACCERR :
+                fprintf(stderr, "process %d: protection violation at address %p\n", active->pid, info->addr);
+                TracePrintf(5, "process %d: protection violation at address %p\n", active->pid, info->addr);
+                break;
+
+            case TRAP_MEMORY_KERNEL :
+                fprintf(stderr, "process %d: Linux kernel sent SIGSEGV at address %p\n", active->pid, info->addr);
+                TracePrintf(5, "process %d: Linux kernel sent SIGSEGV at address %p\n", active->pid, info->addr);
+                break;
+
+            case TRAP_MEMORY_USER :
+                fprintf(stderr, "process %d: received SIGSEGV from user at address %p\n", active->pid, info->addr);
+                TracePrintf(5, "process %d: received SIGSEGV from user at address %p\n", active->pid, info->addr);
+                break;
+        }
+
+        // Terminates the process with an error
+        KernelExit(ERROR);
     }
 }
 

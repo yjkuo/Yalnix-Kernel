@@ -126,11 +126,11 @@ int KernelFork (int caller_pid) {
         TracePrintf(10, "Fork: kernel out of memory\n");
         return ERROR;
     }
-    
+
     // Remembers the memory usage of the child process
     child_process->used_npg = active->used_npg;
+    child_process->user_stack_base = active->user_stack_base;
     child_process->brk = active->brk;
-    child_process->sp = active->sp;
 
     // Marks the two processes as parent and child
     insertl(active->running_chd, child_process);

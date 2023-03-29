@@ -489,7 +489,7 @@ int InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
     pcb->state = state;
     pcb->ptaddr0 = addr;
     pcb->used_npg = 0;
-    pcb->sp = 0;
+    pcb->user_stack_base = 0;
     pcb->brk = 0;
     pcb->clock_ticks = -1;
     pcb->input_buf.data = (char*) malloc(TERMINAL_MAX_LINE);
@@ -752,7 +752,6 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     // Initializes SP for current process to (void*)cpp
     info->sp = (void*) cpp;
-    active->sp = (uintptr_t) cpp;
 
     // Frees all the old physical memory belonging to this process
     for(i = 0; i < PAGE_TABLE_LEN - KERNEL_STACK_PAGES; i++)
@@ -785,16 +784,16 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
         pt0[i].uprot = PROT_READ | PROT_WRITE;
     }
 
-    // Initialize the program break for the current process
-    active->brk = (uintptr_t)(total_npg << PAGESHIFT);
-
-    // Initialize number of pages used by the program
-    active->used_npg = text_npg + data_bss_npg + stack_npg + KERNEL_STACK_PAGES;
+    // Initializes the program break for the current process
+    active->brk = (uintptr_t)(VMEM_0_BASE + (total_npg << PAGESHIFT));
 
     // Marks all pages in the subsequent gap as invalid
     total_npg = (USER_STACK_LIMIT >> PAGESHIFT) - stack_npg;
     for(; i < total_npg; i++)
         pt0[i].valid = 0;
+
+    // Stores the base of the user stack
+    active->user_stack_base = (uintptr_t)(VMEM_0_BASE + (total_npg << PAGESHIFT));
 
     // Fills in the page table with the right number of user stack pages
     total_npg += stack_npg;
@@ -804,6 +803,9 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
         pt0[i].kprot = PROT_READ | PROT_WRITE;
         pt0[i].uprot = PROT_READ | PROT_WRITE;
     }
+
+    // Initializes the number of pages used by the process
+    active->used_npg = text_npg + data_bss_npg + stack_npg + KERNEL_STACK_PAGES;
 
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
