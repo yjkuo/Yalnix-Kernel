@@ -1,7 +1,8 @@
 #include <comp421/hardware.h>
 
-#include "kernel.h"
 #include "args.h"
+#include "proc.h"
+#include "mmu.h"
 
 
 /* Checks read access for string arguments */

@@ -5,10 +5,11 @@
 #include <comp421/yalnix.h>
 
 #include "syscall.h"
-#include "kernel.h"
 #include "queue.h"
 #include "list.h"
 #include "args.h"
+#include "proc.h"
+#include "mmu.h"
 #include "io.h"
 
 
@@ -26,7 +27,7 @@ int KernelFork (int caller_pid) {
 
     // Creates a PCB for the child process
     struct pcb *child_process = (struct pcb*) malloc(sizeof(struct pcb));
-    retval = InitProcess(child_process, READY, NewPageTable(active->ptaddr0));
+    retval = InitProcess(child_process, READY, InitPageTable(active->ptaddr0));
 
     if (!child_process || retval) {
         TracePrintf(10, "Fork: kernel out of memory\n");
@@ -253,6 +254,12 @@ int KernelBrk (void *addr) {
 
         // Checks if there are enough free pages
         if(end_index - start_index > free_npg) {
+
+            // Frees the borrowed PTE
+            ReleasePTE();
+            WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
+            // Returns an ERROR
             TracePrintf(10, "Brk: not enough free pages\n");
             return ERROR;
         }
@@ -288,11 +295,15 @@ int KernelBrk (void *addr) {
         active->used_npg -= end_index - start_index;
     }
 
+    // Frees the borrowed PTE
+    ReleasePTE();
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
+
     // Flushes all region 0 entries from the TLB
     WriteRegister(REG_TLB_FLUSH, TLB_FLUSH_0);
 
     // Updates the break for the current process
-    active->brk = (uintptr_t) addr;
+    active->brk = (uintptr_t) UP_TO_PAGE(addr);
 
     return 0;
 }

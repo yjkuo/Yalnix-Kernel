@@ -2,7 +2,7 @@
 #define QUEUE_H
 
 
-#include "kernel.h"
+#include "proc.h"
 
 
 // Declares structures to allow PCB manipulation

@@ -4,8 +4,8 @@
 
 ALL = yalnix idle init console shell
 
-KERNEL_OBJS = kernel.o interrupt.o syscall.o args.o queue.o list.o
-KERNEL_SRCS = kernel.c interrupt.c syscall.c args.c queue.c list.c
+KERNEL_OBJS = kernel.o proc.o mmu.o interrupt.o syscall.o args.o queue.o list.o
+KERNEL_SRCS = kernel.c proc.c mmu.c interrupt.c syscall.c args.c queue.c list.c
 
 TEST_DIR = ./tests
 PUBLIC_DIR = /clear/courses/comp421/pub

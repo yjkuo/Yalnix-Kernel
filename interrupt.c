@@ -7,6 +7,8 @@
 #include "syscall.h"
 #include "queue.h"
 #include "list.h"
+#include "proc.h"
+#include "mmu.h"
 #include "io.h"
 
 
