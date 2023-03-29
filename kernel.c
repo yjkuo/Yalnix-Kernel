@@ -148,8 +148,8 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     // Initializes the terminals
     for(i = 0; i < NUM_TERMINALS; i++) {
 
-        // Empties the input buffer
-        memset(&term[i].input_buf, 0, sizeof(struct buffer));
+        // Creates an initial input buffer
+        term[i].input_bufs = NULL;
         term[i].lines = 0;
 
         // Initializes the waiting queues
@@ -480,8 +480,10 @@ void InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
     pcb->sp = 0;
     pcb->brk = 0;
     pcb->clock_ticks = -1;
-    memset(&pcb->input_buf, 0, sizeof(struct buffer));
-    memset(&pcb->output_buf, 0, sizeof(struct buffer));
+    pcb->input_buf.data = (char*) malloc(TERMINAL_MAX_LINE);
+    pcb->input_buf.size = 0;
+    pcb->output_buf.data = (char*) malloc(TERMINAL_MAX_LINE);
+    pcb->output_buf.size = 0;
     pcb->parent = NULL;
     pcb->running_chd = (struct list*) malloc(sizeof(struct list));
     linit(pcb->running_chd);
@@ -552,6 +554,10 @@ void RemoveProcess (struct pcb *pcb) {
 
     // Frees the borrowed PTE
     ReleasePTE();
+
+    // Frees the tty buffers
+    free(pcb->input_buf.data);
+    free(pcb->output_buf.data);
 
     // Destroys the lists of children
     ldestroy(pcb->running_chd);

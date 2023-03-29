@@ -333,19 +333,22 @@ void TtyReceiveHandler (ExceptionInfo *info) {
     TracePrintf(5, "tty receive interrupt\n");
 
     int tty_id;
+    struct terminal *tm;
     struct pcb *next_process;
+    struct buffer *temp_buffer;
     int len;
 
     // Gets the terminal for which the interrupt occurred
     tty_id = info->code;
+    tm = &term[tty_id];
 
     // Checks if any processes are waiting in the read queue
-    if(!qempty(*term[tty_id].read_procs)) {
+    if(!qempty(*tm->read_procs)) {
 
         // Finds the first process that is waiting
-        next_process = deq(term[tty_id].read_procs);
+        next_process = deq(tm->read_procs);
 
-        // Retrieves the line from the terminal 
+        // Retrieves the line from the terminal
         len = TtyReceive(tty_id, next_process->input_buf.data, TERMINAL_MAX_LINE);
         next_process->input_buf.size = len;
 
@@ -356,9 +359,30 @@ void TtyReceiveHandler (ExceptionInfo *info) {
 
     // Else, stores the line in the kernel's input buffer
     else {
-        len = TtyReceive(tty_id, (term[tty_id].input_buf.data + term[tty_id].input_buf.size), TERMINAL_MAX_LINE);
-        term[tty_id].input_buf.size += len;
-        term[tty_id].lines++;
+
+        // Creates space at the end of the buffer for a new line
+        temp_buffer = (struct buffer*) realloc(tm->input_bufs, sizeof(struct buffer) * (tm->lines + 1));
+        if(!temp_buffer) {
+            TracePrintf(5, "cannot buffer any more terminal input\n");
+            return;
+        }
+        tm->input_bufs = temp_buffer;
+
+        // Allocates memory for the line
+        tm->input_bufs[tm->lines].data = (char*) malloc(TERMINAL_MAX_LINE);
+        if(!tm->input_bufs[tm->lines].data) {
+            TracePrintf(5, "cannot buffer any more terminal input\n");
+            tm->input_bufs = (struct buffer*) realloc(tm->input_bufs, sizeof(struct buffer) * tm->lines);
+            return;
+        }
+
+        // Retrieves the line from the terminal
+        len = TtyReceive(tty_id, tm->input_bufs[tm->lines].data, TERMINAL_MAX_LINE);
+        tm->input_bufs[tm->lines].data = (char*) realloc(tm->input_bufs[tm->lines].data, len);
+        tm->input_bufs[tm->lines].size = len;
+
+        // Increments the number of lines available in the buffer
+        tm->lines++;
     }
 }
 
@@ -368,21 +392,23 @@ void TtyTransmitHandler (ExceptionInfo *info) {
     TracePrintf(5, "tty transmit interrupt\n");
 
     int tty_id;
+    struct terminal *tm;
     struct pcb *ready_process, *next_process;
 
     // Gets the terminal for which the interrupt occurred
     tty_id = info->code;
+    tm = &term[tty_id];
 
     // Unblocks the last process from the write queue for this terminal
-    ready_process = deq(term[tty_id].write_procs);
+    ready_process = deq(tm->write_procs);
     ready_process->state = READY;
     enq(&ready, ready_process);
 
     // Checks if any other processes are waiting in this queue
-    if(!qempty(*term[tty_id].write_procs)) {
+    if(!qempty(*tm->write_procs)) {
 
         // Finds the next process that is waiting
-        next_process = peekq(*term[tty_id].write_procs);
+        next_process = peekq(*tm->write_procs);
 
         // Begins transmitting the data for this process
         TtyTransmit(tty_id, next_process->output_buf.data, next_process->output_buf.size);
@@ -390,5 +416,5 @@ void TtyTransmitHandler (ExceptionInfo *info) {
 
     // Else, marks the terminal as ready for output
     else
-        term[tty_id].term_state = FREE;
+        tm->term_state = FREE;
 }

@@ -159,7 +159,7 @@ int KernelFork (int caller_pid) {
 int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     TracePrintf(10, "process %d: executing Exec()\n", active->pid);
 
-    int i, ret_val;
+    int i, retval;
 
     // Validates the arguments
     if(!filename || CheckString(filename)){
@@ -173,10 +173,10 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
         }
 
     // Loads the specified program
-    ret_val = LoadProgram(filename, argvec, info);
+    retval = LoadProgram(filename, argvec, info);
 
     // Case 1 : current process is still runnable
-    if(ret_val == -1) {
+    if(retval == -1) {
         TracePrintf(10, "Exec: load program failed, current process intact\n");
         fprintf(stderr, "Exec: load program failed, current process intact\n");
     
@@ -185,7 +185,7 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     }
 
     // Case 2 : current process is no longer runnable
-    if(ret_val == -2) {
+    if(retval == -2) {
         TracePrintf(10, "Exec: load program failed, current process lost\n");
         fprintf(stderr, "Exec: load program failed, current process lost\n");
 
@@ -411,9 +411,9 @@ int KernelDelay (int clock_ticks) {
 int KernelTtyRead (int tty_id, void *buf, int len) {
     TracePrintf(10, "process %d: executing TtyRead()\n", active->pid);
 
+    struct terminal *tm;
+    int num_chars, i;
     struct pcb *new_process;
-    int num_chars;
-    char temp_buffer[TERMINAL_MAX_LINE];
 
     // Validates the arguments
     if(tty_id < 0 || tty_id >= NUM_TERMINALS) {
@@ -433,29 +433,31 @@ int KernelTtyRead (int tty_id, void *buf, int len) {
     if(len == 0)
         return 0;
 
+    // References the appropriate terminal structure
+    tm = &term[tty_id];
+
     // Checks if there is a line available in the input buffer
-    if(term[tty_id].lines > 0) {
+    if(tm->lines > 0) {
 
-        // Finds the number of characters in the line
-        for(num_chars = 0; num_chars < len; )
-            if(term[tty_id].input_buf.data[num_chars++] == '\n')
-                break;
+        // Copies the data over from the first line
+        num_chars = tm->input_bufs[0].size;
+        strncpy(buf, tm->input_bufs[0].data, num_chars);
 
-        // Copies the data over from the input buffer
-        strncpy(buf, term[tty_id].input_buf.data, num_chars);
+        // Removes the first line
+        free(tm->input_bufs[0].data);
+        for(i = 1; i < tm->lines; i++)
+            tm->input_bufs[i - 1] = tm->input_bufs[i];
+        tm->input_bufs = (struct buffer*) realloc(tm->input_bufs, sizeof(struct buffer) * (tm->lines - 1));
 
-        // Updates the input buffer
-        term[tty_id].input_buf.size -= num_chars;
-        strncpy(temp_buffer, (term[tty_id].input_buf.data + num_chars), term[tty_id].input_buf.size);
-        strncpy(term[tty_id].input_buf.data, temp_buffer, term[tty_id].input_buf.size);
-        term[tty_id].lines--;
+        // Decrements the number of lines available in the buffer
+        tm->lines--;
 
         // Returns the number of characters read
         return num_chars;
     }
 
     // Gets a new process to make active, and switches to it
-    new_process = MoveProcesses(READING, term[tty_id].read_procs);
+    new_process = MoveProcesses(READING, tm->read_procs);
     ContextSwitch(Switch, &active->ctx, (void*) active, (void*) new_process);
 
     // Copies over the contents of the input buffer of the PCB
@@ -470,6 +472,7 @@ int KernelTtyRead (int tty_id, void *buf, int len) {
 int KernelTtyWrite (int tty_id, void *buf, int len) {
     TracePrintf(10, "process %d: executing TtyWrite()\n", active->pid);
 
+    struct terminal *tm;
     struct pcb *new_process;
 
     // Validates the arguments
@@ -490,16 +493,19 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
     if(len == 0)
         return 0;
 
+    // References the appropriate terminal structure
+    tm = &term[tty_id];
+
     // Copies the contents of the buffer to the output buffer of the PCB
     strncpy(active->output_buf.data, buf, len);
     active->output_buf.size = len;
 
     // Gets a new process to make active
-    new_process = MoveProcesses(WRITING, term[tty_id].write_procs);
+    new_process = MoveProcesses(WRITING, tm->write_procs);
 
     // Begins transmitting the data if the terminal is available
-    if(term[tty_id].term_state == FREE) {
-        term[tty_id].term_state = BUSY;
+    if(tm->term_state == FREE) {
+        tm->term_state = BUSY;
         TtyTransmit(tty_id, active->output_buf.data, len);
     }
 

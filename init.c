@@ -1,83 +1,49 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <comp421/yalnix.h>
+#include <unistd.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <comp421/hardware.h>
+#include <comp421/yalnix.h>
 
-#define MAX_ARGC	32
 
-int
-StartTerminal(int i)
-{
-    char *cmd_argv[MAX_ARGC];
-    char numbuf[128];	/* big enough for %d */
-    int pid;
+int main() {
+    TracePrintf(25, "init running ...\n");
 
-    if (i == TTY_CONSOLE)
-	cmd_argv[0] = "console";
-    else
-	cmd_argv[0] = "shell";
-    sprintf(numbuf, "%d", i);
-    cmd_argv[1] = numbuf;
-    cmd_argv[2] = NULL;
+    unsigned int pid;
+    void *curr_break;
+    int i, len;
+	char buffer[8];
 
-    TracePrintf(0, "Pid %d calling Fork\n", GetPid());
-    pid = Fork();
-    TracePrintf(0, "Pid %d got %d from Fork\n", GetPid(), pid);
+    // Tests the GetPid() system call
+    pid = GetPid();
+    TracePrintf(25, "init: pid %d\n", pid);
 
-    if (pid < 0) {
-	TtyPrintf(TTY_CONSOLE,
-	    "Cannot Fork control program for terminal %d.\n", i);
-	return (ERROR);
+    // Tests the Brk() system call
+    curr_break = sbrk(0);
+    curr_break = (void*)((uintptr_t) curr_break + 5);
+    if(!Brk(curr_break))
+        TracePrintf(25, "init: set program break to 0x%x\n", (uintptr_t) curr_break);
+    curr_break = (void*)((uintptr_t) curr_break - 5);
+    if(!Brk(curr_break))
+        TracePrintf(25, "init: restored program break to 0x%x\n", (uintptr_t) curr_break);
+
+    // Tests the Delay() system call
+    for(i = 0; i < 5; i++) {
+        TracePrintf(25, "init: delay #%d for 5 clock ticks\n", i);
+        Delay(5);
     }
 
-    if (pid == 0) {
-	Exec(cmd_argv[0], cmd_argv);
-	TtyPrintf(TTY_CONSOLE,
-	    "Cannot Exec control program for terminal %d.\n", i);
-	Exit(1);
-    }
+	// Tests the TtyRead() system call
+	len = TtyRead(0, buffer, 8);
+	if(len == 7 && strncmp(buffer, "yalnix", 6) == 0)
+        TracePrintf(25, "init: read 'yalnix' from console\n");
 
-    TtyPrintf(TTY_CONSOLE, "Started pid %d on terminal %d\n", pid, i);
-    return (pid);
-}
+	// Tests the TtyWrite() system call
+	len = TtyWrite(0, "yalnix", 6);
+	if(len == 6)
+        TracePrintf(25, "init: wrote 'yalnix' to console\n");
 
-int
-main(int argc, char **argv)
-{
-    int pids[NUM_TERMINALS];
-    int i;
-    int status;
-    int pid;
-
-    for (i = 0; i < NUM_TERMINALS; i++) {
-	pids[i] = StartTerminal(i);
-	if ((i == TTY_CONSOLE) && (pids[TTY_CONSOLE] < 0)) {
-	    TtyPrintf(TTY_CONSOLE, "Cannot start Console monitor!\n");
-	    Exit(1);
-	}
-    }
-
-    while (1) {
-	pid = Wait(&status);
-	if (pid == pids[TTY_CONSOLE]) {
-	    TtyPrintf(TTY_CONSOLE, "Halting Yalnix\n");
-	    /*
-	     *  Halt should normally be a privileged instruction (and
-	     *  thus not usable from user mode), but the hardware
-	     *  has been set up to allow it for this project so that
-	     *  we can shut down Yalnix simply here.
-	     */
-	    Halt();
-	}
-	for (i = 1; i < NUM_TERMINALS; i++) {
-	    if (pid == pids[i]) break;
-	}
-	if (i < NUM_TERMINALS) {
-	    TtyPrintf(TTY_CONSOLE, "Pid %d exited on terminal %d.\n", pid, i);
-	    pids[i] = StartTerminal(i);
-	}
-	else {
-	    TtyPrintf(TTY_CONSOLE, "Mystery pid %d returned from Wait!\n", pid);
-	}
-    }
+    // Tests the Exit() system call
+	Exit(0);
 }

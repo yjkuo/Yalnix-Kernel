@@ -14,13 +14,13 @@
 
 // Creates a structure to represent a kernel buffer
 struct buffer {
-	char data[TERMINAL_MAX_LINE];
+	char *data;
 	int size;
 };
 
 // Creates a structure to store data for a single terminal
 struct terminal {
-	struct buffer input_buf;
+	struct buffer *input_bufs;
 	int lines;
 	struct queue *read_procs, *write_procs;
 	short term_state;
