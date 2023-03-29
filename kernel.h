@@ -91,7 +91,7 @@ void BorrowPTE ();
 void ReleasePTE ();
 int NewPageTable (uintptr_t );
 void CopyKernelStack (uintptr_t );
-void InitProcess (struct pcb* , enum state_t , uintptr_t );
+int InitProcess (struct pcb* , enum state_t , uintptr_t );
 struct pcb* MoveProcesses (enum state_t , void* );
 void RemoveProcess (struct pcb* );
 SavedContext* InitContext (SavedContext* , void* , void* );

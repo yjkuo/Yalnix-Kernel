@@ -283,6 +283,7 @@ extern int SetKernelBrk (void *addr) {
         } else {
 
             // addr exceeds region 1 vitual memory
+            TracePrintf(0, "SetKernelBrk: out of memory\n");
             return -1;
         }
 
@@ -470,7 +471,7 @@ void CopyKernelStack (uintptr_t addr) {
 }
 
 /* Helps initialize a PCB */
-void InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
+int InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
 
     // Initializes the PCB using the passed values
     pcb->pid = lastpid++;
@@ -485,11 +486,18 @@ void InitProcess (struct pcb *pcb, enum state_t state, uintptr_t addr) {
     pcb->output_buf.data = (char*) malloc(TERMINAL_MAX_LINE);
     pcb->output_buf.size = 0;
     pcb->parent = NULL;
-    pcb->running_chd = (struct list*) malloc(sizeof(struct list));
-    linit(pcb->running_chd);
-    pcb->exited_chd = (struct queue*) malloc(sizeof(struct queue));
-    qinit(pcb->exited_chd);
     pcb->exit_status = 0;
+    pcb->running_chd = (struct list*) malloc(sizeof(struct list));
+    pcb->exited_chd = (struct queue*) malloc(sizeof(struct queue));
+
+    if (!pcb->input_buf.data || !pcb->output_buf.data || !pcb->running_chd || !pcb->exited_chd) {
+        return ERROR;
+    }
+
+    linit(pcb->running_chd);
+    qinit(pcb->exited_chd);
+
+    return 0;
 }
 
 
@@ -680,6 +688,12 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
 
     // Saves the arguments in a separate buffer in region 1
     cp = argbuf = (char*) malloc(size);
+    if (!cp) {
+        TracePrintf(0, "LoadProgram: malloc returns NULL\n");
+        free(argbuf);
+        close(fd);
+        return -1;
+    }
     for(i = 0; args[i] != NULL; i++) {
         strcpy(cp, args[i]);
         cp += strlen(cp) + 1;
@@ -699,7 +713,6 @@ int LoadProgram (char *name, char **args, ExceptionInfo *info) {
     // Makes sure we have enough virtual memory to fit everything within the size of a page table
     if(MEM_INVALID_PAGES + text_npg + data_bss_npg + 1 + stack_npg + 1 + KERNEL_STACK_PAGES > PAGE_TABLE_LEN) {
         TracePrintf(0, "LoadProgram: program '%s' size too large for VIRTUAL memory\n", name);
-        TracePrintf(0, "%d vs %d\n", MEM_INVALID_PAGES + text_npg + data_bss_npg + 1 + stack_npg + 1 + KERNEL_STACK_PAGES, PAGE_TABLE_LEN);
         free(argbuf);
         close(fd);
         return -1;

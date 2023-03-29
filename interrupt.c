@@ -237,8 +237,8 @@ void MemoryHandler (ExceptionInfo *info) {
                 ReleasePTE();
                 WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
             } else {
-                fprintf(stderr, "process %d: stack overflow at address 0x%x\n", active->pid, (unsigned int) trap_addr);
-                TracePrintf(5, "process %d: stack overflow at address 0x%x\n", active->pid, (unsigned int) trap_addr);
+                fprintf(stderr, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
+                TracePrintf(5, "process %d: no mapping at address 0x%x\n", active->pid, (unsigned int) trap_addr);
                 KernelExit(ERROR);
             }
             active->sp = (uintptr_t) info->sp;

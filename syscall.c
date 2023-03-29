@@ -110,16 +110,23 @@ int CheckBuffer (char *buf, int len, int prot) {
 int KernelFork (int caller_pid) {
     TracePrintf(10, "process %d: executing Fork()\n", active->pid);
 
+    int retval;
+
     // Checks if there is enough free memory
-    if(active->used_npg + 1> free_npg) {
+    if(active->used_npg + 1 > free_npg) {
         TracePrintf(10, "Fork: not enough free pages\n");
         return ERROR;
     }
 
     // Creates a PCB for the child process
     struct pcb *child_process = (struct pcb*) malloc(sizeof(struct pcb));
-    InitProcess(child_process, READY, NewPageTable(active->ptaddr0));
+    retval = InitProcess(child_process, READY, NewPageTable(active->ptaddr0));
 
+    if (!child_process || retval) {
+        TracePrintf(10, "Fork: kernel out of memory\n");
+        return ERROR;
+    }
+    
     // Remembers the memory usage of the child process
     child_process->used_npg = active->used_npg;
     child_process->brk = active->brk;
@@ -164,6 +171,10 @@ int KernelExec (char *filename, char **argvec, ExceptionInfo *info) {
     // Validates the arguments
     if(!filename || CheckString(filename)){
         TracePrintf(10, "Exec: invalid filename pointer %p\n", (uintptr_t) filename);
+        return ERROR;
+    }
+    if (!argvec) {
+        TracePrintf(10, "Exec: invalid argument pointer %p\n", (uintptr_t) argvec);
         return ERROR;
     }
     for(i = 0; argvec[i]; i++)
@@ -499,7 +510,6 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
     // Copies the contents of the buffer to the output buffer of the PCB
     strncpy(active->output_buf.data, buf, len);
     active->output_buf.size = len;
-
     // Gets a new process to make active
     new_process = MoveProcesses(WRITING, tm->write_procs);
 
