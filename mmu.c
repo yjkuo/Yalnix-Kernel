@@ -1,7 +1,9 @@
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #include <comp421/hardware.h>
+#include <comp421/yalnix.h>
 
 #include "mmu.h"
 
@@ -60,6 +62,9 @@ void BorrowPTE () {
     if(pt1[borrowed_index].valid) {
         pte_buffer[pte_count] = pt1[borrowed_index];
         pte_count++;
+
+        // Flushes the invalidated TLB entry
+        WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
     }
 
     // Initializes the PTE

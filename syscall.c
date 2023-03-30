@@ -27,9 +27,13 @@ int KernelFork (int caller_pid) {
 
     // Creates a PCB for the child process
     struct pcb *child_process = (struct pcb*) malloc(sizeof(struct pcb));
-    retval = InitProcess(child_process, READY, InitPageTable(active->ptaddr0));
+    if(!child_process) {
+        TracePrintf(10, "Fork: kernel out of memory\n");
+        return ERROR;
+    }
 
-    if (!child_process || retval) {
+    retval = InitProcess(child_process, READY, InitPageTable(active->ptaddr0));
+    if(retval) {
         TracePrintf(10, "Fork: kernel out of memory\n");
         return ERROR;
     }
@@ -429,6 +433,7 @@ int KernelTtyWrite (int tty_id, void *buf, int len) {
     // Copies the contents of the buffer to the output buffer of the PCB
     strncpy(active->output_buf.data, buf, len);
     active->output_buf.size = len;
+
     // Gets a new process to make active
     new_process = MoveProcesses(WRITING, tm->write_procs);
 

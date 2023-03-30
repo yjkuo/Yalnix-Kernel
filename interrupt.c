@@ -229,8 +229,9 @@ void MemoryHandler (ExceptionInfo *info) {
         ReleasePTE();
         WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) pt0);
 
-        // Updates the user stack base
+        // Updates the memory usage of the current process
         active->user_stack_base = DOWN_TO_PAGE(trap_addr);
+        active->used_npg += end_index - start_index;
     }
 
     // Else, prints an appropriate error message

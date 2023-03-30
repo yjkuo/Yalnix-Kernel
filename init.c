@@ -22,10 +22,10 @@ int main() {
     curr_break = sbrk(0);
     curr_break = (void*)((uintptr_t) curr_break + 5);
     if(!Brk(curr_break))
-        TracePrintf(25, "init: set program break to 0x%x\n", (uintptr_t) curr_break);
+        TracePrintf(25, "init: set program break to %p\n", curr_break);
     curr_break = (void*)((uintptr_t) curr_break - 5);
     if(!Brk(curr_break))
-        TracePrintf(25, "init: restored program break to 0x%x\n", (uintptr_t) curr_break);
+        TracePrintf(25, "init: restored program break to %p\n", curr_break);
 
     // Tests the Delay() system call
     for(i = 0; i < 5; i++) {

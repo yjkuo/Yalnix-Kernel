@@ -46,7 +46,7 @@ extern void KernelStart (ExceptionInfo *info, unsigned int pmem_size, void *orig
     free_head = INT_MAX;
 
     // Adds pages below the kernel stack to the list of free pages (skipping the first MEM_INVALID_PAGES + 1 pages)
-    addr = PMEM_BASE + MEM_INVALID_SIZE;
+    addr = PMEM_BASE + MEM_INVALID_SIZE + PAGESIZE;
     for(; addr < KERNEL_STACK_BASE; addr += PAGESIZE) {
         *(unsigned int*) addr = free_head;
         free_head = (addr - PMEM_BASE) >> PAGESHIFT;
@@ -216,7 +216,7 @@ extern int SetKernelBrk (void *addr) {
         TracePrintf(0, "SetKernelBrk: VM enabled\n");
 
         // Confirms that the specified address is higher than the current break
-        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT - PAGESIZE) {
+        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT - (PAGESIZE << 2)) {
 
             // Finds the range of pages to be allocated
             start_index = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
