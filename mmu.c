@@ -78,13 +78,13 @@ void ReleasePTE () {
 
     // Frees the PTE
     pt1[borrowed_index].valid = 0;
-    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
 
     // Restores a buffered PTE
     if(pte_count) {
         pte_count--;
         pt1[borrowed_index] = pte_buffer[pte_count];
     }
+    WriteRegister(REG_TLB_FLUSH, (RCS421RegVal) borrowed_addr);
 
     // Updates the borrowed address and index
     borrowed_addr = (void*)((uintptr_t) borrowed_addr + PAGESIZE);

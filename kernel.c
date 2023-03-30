@@ -216,7 +216,7 @@ extern int SetKernelBrk (void *addr) {
         TracePrintf(0, "SetKernelBrk: VM enabled\n");
 
         // Confirms that the specified address is higher than the current break
-        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT - (PAGESIZE << 2)) {
+        if((uintptr_t) addr > kernelbrk && (uintptr_t) addr < VMEM_1_LIMIT) {
 
             // Finds the range of pages to be allocated
             start_index = (UP_TO_PAGE(kernelbrk) - VMEM_1_BASE) >> PAGESHIFT;
